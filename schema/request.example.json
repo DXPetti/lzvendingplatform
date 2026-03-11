@@ -1,0 +1,112 @@
+{
+  "$schema": "./request.schema.json",
+  "_comment": "This file contains three example request scenarios. In production, each deployment uses a separate single-scenario request file.",
+
+  "examples": [
+
+    {
+      "_scenario": "Scenario 1 — BYO / Private / Production",
+      "_description": "Corp management group, /26 VNet, vWAN peered, private DNS zones linked.",
+
+      "workloadName": "ecommerce-api",
+      "workloadCategory": "BYO",
+      "environment": "Production",
+      "workloadType": "Private",
+      "baseIpAddress": "10.50.10.0",
+      "networkSize": "Medium",
+      "roleAssignments": [
+        {
+          "principalId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+          "principalType": "Group"
+        }
+      ],
+      "resourceProviders": {
+        "Microsoft.ContainerRegistry": [],
+        "Microsoft.KeyVault": [],
+        "Microsoft.Network": []
+      },
+      "enableTelemetry": true,
+      "tags": {
+        "BusinessUnit": "Retail",
+        "CostCentre": "CC-1234",
+        "DataClassification": "Confidential",
+        "Owner": "platform@contoso.com",
+        "SupportContact": "ops@contoso.com"
+      }
+    },
+
+    {
+      "_scenario": "Scenario 2 — BYO / Public / NonProduction",
+      "_description": "Online management group, /27 VNet, no vWAN peering, no DNS zone links.",
+
+      "workloadName": "marketing-site",
+      "workloadCategory": "BYO",
+      "environment": "NonProduction",
+      "workloadType": "Public",
+      "baseIpAddress": "10.60.5.0",
+      "networkSize": "Small",
+      "roleAssignments": [
+        {
+          "principalId": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+          "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+          "principalType": "Group"
+        }
+      ],
+      "resourceProviders": {
+        "Microsoft.Web": [],
+        "Microsoft.Insights": []
+      },
+      "enableTelemetry": true,
+      "tags": {
+        "BusinessUnit": "Marketing",
+        "CostCentre": "CC-5678",
+        "DataClassification": "Internal",
+        "Owner": "marketing-dev@contoso.com",
+        "SupportContact": "devops@contoso.com"
+      }
+    },
+
+    {
+      "_scenario": "Scenario 3 — ApprovedWorkload / ContainerApps / Production / Private",
+      "_description": "ACA LZA pattern, /21 spoke, Application Gateway exposure, Private workload type triggers Step 4 vWAN connection.",
+
+      "workloadName": "payments-aca",
+      "workloadCategory": "ApprovedWorkload",
+      "environment": "Production",
+      "approvedWorkload": {
+        "pattern": "ContainerApps",
+        "workloadType": "Private",
+        "spokeVNetAddressSpace": "10.70.0.0/21",
+        "exposeWith": "applicationGateway",
+        "certKeyName": "appgw-payments-tls",
+        "vmAdminPassword": "<replace-with-secure-value-or-use-pipeline-variable>",
+        "vmSize": "Standard_B2s",
+        "enableApplicationInsights": true,
+        "enableDaprInstrumentation": false
+      },
+      "roleAssignments": [
+        {
+          "principalId": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+          "roleDefinitionId": "/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+          "principalType": "Group"
+        }
+      ],
+      "resourceProviders": {
+        "Microsoft.App": [],
+        "Microsoft.ContainerRegistry": [],
+        "Microsoft.KeyVault": [],
+        "Microsoft.Insights": []
+      },
+      "enableTelemetry": true,
+      "tags": {
+        "BusinessUnit": "Payments",
+        "CostCentre": "CC-9012",
+        "DataClassification": "Highly Confidential",
+        "Owner": "payments-platform@contoso.com",
+        "SupportContact": "payments-ops@contoso.com"
+      }
+    }
+
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema",
+  "description": "Customer-specific infrastructure values. All values here are environment-specific and must be populated before use. No values in Bicep templates or pipeline YAML reference anything not in this file.",
+
+  "defaults": {
+    "location": "australiaeast",
+    "orgShortName": "contoso"
+  },
+
+  "billingScopes": {
+    "production": "/providers/Microsoft.Billing/billingAccounts/<billingAccountId>/enrollmentAccounts/<enrollmentAccountId-prod>",
+    "nonProduction": "/providers/Microsoft.Billing/billingAccounts/<billingAccountId>/enrollmentAccounts/<enrollmentAccountId-dev>"
+  },
+
+  "managementGroups": {
+    "corp": "mg-contoso-corp",
+    "online": "mg-contoso-online",
+    "sandbox": "mg-contoso-sandbox"
+  },
+
+  "vwanHubResourceId": "/subscriptions/<hub-subscription-id>/resourceGroups/rg-vwan-hub-prod/providers/Microsoft.Network/virtualHubs/vhub-prod-aue",
+  "vwanHubResourceGroupName": "rg-vwan-hub-prod",
+
+  "privateDnsZones": [
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.file.core.windows.net",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.vaultcore.azure.net",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.azurewebsites.net",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.azurecr.io",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net",
+    "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.azurecontainerapps.io"
+  ],
+
+  "dnsZonesSubscriptionId": "<dns-subscription-id>",
+  "dnsZonesResourceGroupName": "rg-privatedns-prod"
+}

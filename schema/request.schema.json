@@ -1,0 +1,200 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://contoso.com/lz-vending/request.schema.json",
+  "title": "Landing Zone Vending Request",
+  "description": "Schema for ITSM-sourced landing zone provisioning requests.",
+  "type": "object",
+
+  "required": [
+    "workloadName",
+    "workloadCategory",
+    "environment",
+    "tags"
+  ],
+
+  "properties": {
+
+    "workloadName": {
+      "type": "string",
+      "description": "Short workload name. Used in naming and tagging. Lowercase alphanumeric and hyphens only.",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,20}[a-z0-9]$"
+    },
+
+    "workloadCategory": {
+      "type": "string",
+      "description": "Determines the deployment path. 'ApprovedWorkload' runs Step 2 (LZA modules). 'BYO' runs Step 3 (custom networking).",
+      "enum": ["ApprovedWorkload", "BYO"]
+    },
+
+    "environment": {
+      "type": "string",
+      "description": "Deployment environment. Controls subscription offer type and management group placement.",
+      "enum": ["Production", "NonProduction"]
+    },
+
+    "baseIpAddress": {
+      "type": "string",
+      "description": "Base IP address for the VNet. Combined with networkSize to derive the CIDR. Required for BYO workloads only.",
+      "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+    },
+
+    "networkSize": {
+      "type": "string",
+      "description": "Determines the VNet prefix length. Small=/27, Medium=/26, Large=/25. Required for BYO workloads only.",
+      "enum": ["Small", "Medium", "Large"]
+    },
+
+    "workloadType": {
+      "type": "string",
+      "description": "Connectivity model. Private=Corp MG + vWAN peering + DNS. Public=Online MG. Sandbox=isolated. Required for BYO workloads only.",
+      "enum": ["Private", "Public", "Sandbox"]
+    },
+
+    "approvedWorkload": {
+      "type": "object",
+      "description": "Configuration for approved workload patterns. Required when workloadCategory is 'ApprovedWorkload'.",
+      "required": [
+        "pattern",
+        "spokeVNetAddressSpace",
+        "exposeWith",
+        "certKeyName",
+        "vmAdminPassword",
+        "vmSize",
+        "enableApplicationInsights",
+        "enableDaprInstrumentation"
+      ],
+      "properties": {
+
+        "pattern": {
+          "type": "string",
+          "description": "The approved workload pattern to deploy.",
+          "enum": ["ContainerApps"]
+        },
+
+        "workloadType": {
+          "type": "string",
+          "description": "Connectivity model for approved workloads. Private triggers vWAN connection in Step 4.",
+          "enum": ["Private", "Public"]
+        },
+
+        "spokeVNetAddressSpace": {
+          "type": "string",
+          "description": "Full CIDR for the spoke VNet. Caller is responsible for correct sizing. Minimum /21 for ACA LZA.",
+          "pattern": "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)/([0-9]|[1-2][0-9]|3[0-2])$"
+        },
+
+        "exposeWith": {
+          "type": "string",
+          "description": "How the container app environment is exposed externally.",
+          "enum": ["applicationGateway", "frontDoor", "none"]
+        },
+
+        "certKeyName": {
+          "type": "string",
+          "description": "Name of the certificate key in Key Vault for the Application Gateway TLS termination."
+        },
+
+        "vmAdminPassword": {
+          "type": "string",
+          "description": "Admin password for the jump box VM.",
+          "secret": true
+        },
+
+        "vmSize": {
+          "type": "string",
+          "description": "SKU for the jump box VM.",
+          "default": "Standard_B1s"
+        },
+
+        "enableApplicationInsights": {
+          "type": "boolean",
+          "description": "Deploy Application Insights for the container app environment.",
+          "default": true
+        },
+
+        "enableDaprInstrumentation": {
+          "type": "boolean",
+          "description": "Enable Dapr instrumentation via Application Insights.",
+          "default": false
+        }
+      },
+      "additionalProperties": false
+    },
+
+    "roleAssignments": {
+      "type": "array",
+      "description": "RBAC role assignments to apply at subscription scope post-deployment.",
+      "items": {
+        "type": "object",
+        "required": ["principalId", "roleDefinitionId", "principalType"],
+        "properties": {
+          "principalId": {
+            "type": "string",
+            "description": "Object ID of the principal (user, group, or service principal).",
+            "pattern": "^[0-9a-fA-F-]{36}$"
+          },
+          "roleDefinitionId": {
+            "type": "string",
+            "description": "Full resource ID of the role definition.",
+            "pattern": "^/providers/Microsoft\\.Authorization/roleDefinitions/[0-9a-fA-F-]{36}$"
+          },
+          "principalType": {
+            "type": "string",
+            "enum": ["User", "Group", "ServicePrincipal"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+
+    "resourceProviders": {
+      "type": "object",
+      "description": "Resource providers to register on the new subscription. Key = provider namespace, value = array of features to enable.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+
+    "enableTelemetry": {
+      "type": "boolean",
+      "description": "Enable AVM deployment telemetry.",
+      "default": true
+    },
+
+    "tags": {
+      "type": "object",
+      "description": "Mandatory request tags. Four additional tags are appended by the pipeline at deploy time.",
+      "required": [
+        "BusinessUnit",
+        "CostCentre",
+        "DataClassification",
+        "Owner",
+        "SupportContact"
+      ],
+      "properties": {
+        "BusinessUnit": { "type": "string" },
+        "CostCentre":   { "type": "string" },
+        "DataClassification": {
+          "type": "string",
+          "enum": ["Public", "Internal", "Confidential", "Highly Confidential"]
+        },
+        "Owner":          { "type": "string" },
+        "SupportContact": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+
+  "if": {
+    "properties": { "workloadCategory": { "const": "BYO" } }
+  },
+  "then": {
+    "required": ["workloadType", "networkSize", "baseIpAddress"]
+  },
+  "else": {
+    "required": ["approvedWorkload"]
+  },
+
+  "additionalProperties": false
+}
