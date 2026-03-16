@@ -8,28 +8,28 @@ The pipeline has eight stages. Stages 0a, 0b, and 0c run before any validation o
 flowchart TD
     A([ITSM Request JSON]) --> S0A
 
-    S0A["Stage 0a — Transform\nInvoke-LZVending.ps1 -Stage Transform\nLZTransform.psm1 — pure derivation\nProduces: lz-context.json artifact\nSets ADO routing variables"]
+    S0A["Stage 0a — Transform<br>Invoke-LZVending.ps1 -Stage Transform<br>LZTransform.psm1 — pure derivation<br>Produces: lz-context.json artifact<br>Sets ADO routing variables"]
 
-    S0A --> S0B["Stage 0b — Entra Groups\nInvoke-LZVending.ps1 -Stage EntraGroups\nLZEntraGroups.psm1\nCreates contributor + reader groups\nAdds owner to contributor group\nEmits group OIDs as pipeline variables"]
+    S0A --> S0B["Stage 0b — Entra Groups<br>Invoke-LZVending.ps1 -Stage EntraGroups<br>LZEntraGroups.psm1<br>Creates contributor + reader groups<br>Adds owner to contributor group<br>Emits group OIDs as pipeline variables"]
 
-    S0B --> S0C["Stage 0c — Bicep Params\nInvoke-LZVending.ps1 -Stage BicepParams\nLZBicepParams.psm1\nMerges group OIDs into role assignments\nGenerates .generated.bicepparam files"]
+    S0B --> S0C["Stage 0c — Bicep Params<br>Invoke-LZVending.ps1 -Stage BicepParams<br>LZBicepParams.psm1<br>Merges group OIDs into role assignments<br>Generates .generated.bicepparam files"]
 
-    S0C --> S1["Stage 1 — Validate\naz deployment mg what-if\nFully representative preview\nincludes platform group assignments"]
+    S0C --> S1["Stage 1 — Validate<br>az deployment mg what-if<br>Fully representative preview<br>includes platform group assignments"]
 
     S1 --> GATE{Approval Gate}
 
-    GATE --> S2["Stage 2 — Deploy Subscription\navm/ptn/lz/sub-vending\nvirtualNetworkEnabled: false\nOutputs: subscriptionId"]
+    GATE --> S2["Stage 2 — Deploy Subscription<br>avm/ptn/lz/sub-vending<br>virtualNetworkEnabled: false<br>Outputs: subscriptionId"]
 
     S2 --> CAT{workloadCategory?}
 
-    CAT -- ApprovedWorkload --> S3A["Stage 3a — Deploy Approved Workload\navm/ptn/aca-lza/hosting-environment\nhubVirtualNetworkResourceId: ''\nOutputs: spokeVNetResourceId"]
+    CAT -- ApprovedWorkload --> S3A["Stage 3a — Deploy Approved Workload<br>avm/ptn/aca-lza/hosting-environment<br>hubVirtualNetworkResourceId: ''<br>Outputs: spokeVNetResourceId"]
 
-    CAT -- BYO --> S3B["Stage 3b — Deploy BYO Networking\nbicep/networking/main.bicep\nVNet · NSG · DNS zone links\nOutputs: virtualNetworkResourceId"]
+    CAT -- BYO --> S3B["Stage 3b — Deploy BYO Networking<br>bicep/networking/main.bicep<br>VNet · NSG · DNS zone links<br>Outputs: virtualNetworkResourceId"]
 
-    S3A --> VWAN{workloadType\n== Private?}
+    S3A --> VWAN{workloadType<br>== Private?}
     S3B --> VWAN
 
-    VWAN -- Yes --> S4["Stage 4 — Connect vWAN\naz network vhub connection create\nReads spokeVNetResourceId from\nwhichever Stage 3 ran"]
+    VWAN -- Yes --> S4["Stage 4 — Connect vWAN<br>az network vhub connection create<br>Reads spokeVNetResourceId from<br>whichever Stage 3 ran"]
     VWAN -- No --> END([Done])
     S4 --> END
 ```
@@ -41,18 +41,18 @@ flowchart TD
 ```mermaid
 flowchart TD
     subgraph orchestrator["scripts/"]
-        INV["Invoke-LZVending.ps1\n-Stage Transform | EntraGroups | BicepParams"]
+        INV["Invoke-LZVending.ps1<br>-Stage Transform | EntraGroups | BicepParams"]
     end
 
     subgraph modules["scripts/modules/"]
-        TRN["LZTransform.psm1\nPure derivation\nNo side effects\nSingle source of truth"]
-        ENT["LZEntraGroups.psm1\nEntra group creation\nOwner membership\nIdempotent"]
-        BCP["LZBicepParams.psm1\nParam file generation\nRole assignment merge"]
+        TRN["LZTransform.psm1<br>Pure derivation<br>No side effects<br>Single source of truth"]
+        ENT["LZEntraGroups.psm1<br>Entra group creation<br>Owner membership<br>Idempotent"]
+        BCP["LZBicepParams.psm1<br>Param file generation<br>Role assignment merge"]
     end
 
     subgraph artifacts["Pipeline Artifacts"]
-        CTX["lz-context.json\nImmutable\nPublished by Stage 0a\nConsumed by 0b and 0c"]
-        PRM["generated-bicep-params/\nPublished by Stage 0c\nConsumed by Stages 1–3"]
+        CTX["lz-context.json<br>Immutable<br>Published by Stage 0a<br>Consumed by 0b and 0c"]
+        PRM["generated-bicep-params/<br>Published by Stage 0c<br>Consumed by Stages 1–3"]
     end
 
     INV -- "always calls first" --> TRN
@@ -60,7 +60,7 @@ flowchart TD
     INV -- "Stage BicepParams" --> BCP
 
     TRN --> CTX
-    ENT -- "group OIDs via\nADO pipeline variables" --> BCP
+    ENT -- "group OIDs via<br>ADO pipeline variables" --> BCP
     BCP --> PRM
 ```
 
@@ -84,7 +84,7 @@ flowchart LR
     end
 
     subgraph bicep_sub["bicep/subscription/"]
-        SUB[main.bicep\navm/ptn/lz/sub-vending]
+        SUB[main.bicep<br>avm/ptn/lz/sub-vending]
     end
 
     subgraph bicep_net["bicep/networking/"]
@@ -96,7 +96,7 @@ flowchart LR
     end
 
     subgraph bicep_aw["bicep/approved-workloads/aca-lza/"]
-        ACA[main.bicep\navm/ptn/aca-lza/hosting-environment]
+        ACA[main.bicep<br>avm/ptn/aca-lza/hosting-environment]
     end
 
     subgraph Entra["Entra ID"]
@@ -113,7 +113,7 @@ flowchart LR
     REQ --> INV
     CFG --> INV
 
-    INV -- subscription params\n+ group role assignments --> SUB
+    INV -- subscription params<br>+ group role assignments --> SUB
     INV -- networking params --> NET
     INV -- aca-lza params --> ACA
     ENT --> CG & RG
