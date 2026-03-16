@@ -40,29 +40,46 @@ Replace all placeholder values. This is the only file that should contain enviro
 
 ---
 
-## Step 2 — Create the ADO Service Connection
+## Step 2 — Grant Microsoft Graph Permissions
+
+The pipeline provisions Entra ID security groups in Stage 0b. This requires Microsoft Graph API permissions on the same service principal used by the WIF service connection. These are separate from Azure RBAC and must be granted explicitly.
+
+1. In the Azure Portal, go to **Entra ID → App registrations**.
+2. Find the app registration backing your WIF service connection.
+3. Go to **API permissions → Add a permission → Microsoft Graph → Application permissions**.
+4. Add the following permissions:
+   - `Group.Create`
+   - `GroupMember.ReadWrite.All`
+   - `User.Read.All`
+5. Click **Grant admin consent** for your tenant.
+
+> **Note:** If your organisation's Entra policies restrict group creation to a specific admin role, work with your identity team to either grant the permissions above or establish a delegated group-creation process.
+
+---
+
+## Step 3 — Create the ADO Service Connection
 
 1. In Azure DevOps, go to **Project Settings → Service Connections → New service connection → Azure Resource Manager**.
 2. Select **Workload Identity Federation (automatic)** or configure manually with a federated credential.
-3. Grant the service principal the following roles:
+3. Grant the service principal the following Azure RBAC roles:
    - `Owner` at the EA enrollment account scope (required for subscription creation)
    - `Owner` at the management group scope (required for MG placement)
-   - `Contributor` on the vWAN hub resource group (required for Stage 5)
+   - `Contributor` on the vWAN hub resource group (required for Stage 4)
 4. Name the service connection `sc-lz-vending-wif` (or update the `serviceConnectionName` pipeline parameter).
 
 ---
 
-## Step 3 — Configure the ADO Environment (Approval Gate)
+## Step 4 — Configure the ADO Environment (Approval Gate)
 
 1. In Azure DevOps, go to **Pipelines → Environments → New environment**.
 2. Name it `lz-vending-approval`.
 3. Add an **Approvals** check with your platform team as approvers.
 
-This environment is referenced by Stage 3 (Deploy Subscription) — the pipeline will pause for manual approval after the what-if preview.
+This environment is referenced by Stage 2 (Deploy Subscription). The pipeline pauses here after the what-if preview — approvers will see the complete deployment plan including platform-provisioned role assignments.
 
 ---
 
-## Step 4 — Add the Pipeline Secret Variable
+## Step 5 — Add the Pipeline Secret Variable
 
 The ACA LZA pattern requires a VM admin password for the jump box. Set this as a pipeline secret:
 
@@ -73,7 +90,7 @@ For BYO workloads this variable is unused but must exist (the pipeline reference
 
 ---
 
-## Step 5 — Register the Pipeline
+## Step 6 — Register the Pipeline
 
 1. In Azure DevOps, go to **Pipelines → New pipeline → Azure Repos Git**.
 2. Select your repository and point to `pipelines/lz-vending.yml`.
@@ -81,9 +98,11 @@ For BYO workloads this variable is unused but must exist (the pipeline reference
 
 ---
 
-## Step 6 — Create a Request File
+## Step 7 — Create a Request File
 
 Create a JSON file in the `requests/` directory (create the directory if it doesn't exist). Use one of the three scenarios below as a starting point.
+
+The `tags.Owner` value must be a valid UPN in your Entra tenant — it is used to resolve the LZ owner's Object ID and add them as a member of the `<subscriptionname>-contributor` group.
 
 ### BYO / Private / Production
 ```json
@@ -163,7 +182,7 @@ Commit the file to the repository before running the pipeline.
 
 ---
 
-## Step 7 — Run the Pipeline
+## Step 8 — Run the Pipeline
 
 1. Go to **Pipelines → lz-vending → Run pipeline**.
 2. Set `requestFilePath` to the path of your request file (e.g. `requests/ecommerce-api.json`).
@@ -171,13 +190,29 @@ Commit the file to the repository before running the pipeline.
 4. Click **Run**.
 
 The pipeline will:
-1. Transform the request into Bicep param files
-2. Run a what-if preview against the subscription deployment
-3. **Pause for approval** — review the what-if output, then approve
-4. Create the subscription and place it in the correct management group
-5. Deploy networking or the approved workload pattern
-6. Connect the spoke VNet to vWAN (Private workloads only)
-7. Publish a deployment summary artifact
+
+1. **0a — Transform:** Derive all computed values from the request and customer config. Publish the immutable `lz-context.json` artifact.
+2. **0b — Entra Groups:** Create `<subscriptionname>-contributor` and `<subscriptionname>-reader` security groups. Add the LZ owner as a member of the contributor group.
+3. **0c — Bicep Params:** Generate all `.generated.bicepparam` files. Merge the group OIDs into the subscription role assignments so the what-if is fully representative.
+4. **1 — Validate:** Run a what-if preview against the subscription deployment. Review the output before approving.
+5. **Pause for approval** — the pipeline waits here. Review the what-if output in the stage logs, then approve the `lz-vending-approval` environment check.
+6. **2 — Deploy Subscription:** Create the subscription and place it in the correct management group. Role assignments (including the two platform groups) are applied.
+7. **3a or 3b — Networking / Workload:** Deploy BYO networking or the approved workload pattern into the new subscription.
+8. **4 — Connect vWAN** (Private workloads only): Connect the spoke VNet to the vWAN hub.
+9. Publish a deployment summary artifact.
+
+---
+
+## What Gets Created Per Deployment
+
+In addition to the subscription and its networking or workload resources, every LZ deployment creates:
+
+| Resource | Name | Notes |
+|---|---|---|
+| Entra security group | `<subscriptionname>-contributor` | LZ owner added as member |
+| Entra security group | `<subscriptionname>-reader` | Empty — populate via PIM or manual assignment |
+| Role assignment | Contributor at subscription scope | Assigned to contributor group |
+| Role assignment | Reader at subscription scope | Assigned to reader group |
 
 ---
 
@@ -186,5 +221,5 @@ The pipeline will:
 1. Create `bicep/approved-workloads/<pattern-name>/main.bicep` wrapping the relevant LZA AVM module.
 2. Create `bicep/approved-workloads/<pattern-name>/main.bicepparam`.
 3. Add a new `pattern` enum value to `schema/request.schema.json`.
-4. Add a new `elseif` branch to `Convert-RequestToBicepParams.ps1` for the new pattern's param generation.
-5. No changes to the pipeline YAML are required — Stage 4a dynamically resolves the pattern directory.
+4. Add a new `switch` case to `LZBicepParams.psm1` for the new pattern's param generation.
+5. No changes to `Invoke-LZVending.ps1`, `LZTransform.psm1`, `LZEntraGroups.psm1`, or the pipeline YAML are required.

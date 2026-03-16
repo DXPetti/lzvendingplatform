@@ -1,17 +1,24 @@
-# ============================================================
+# ==============================================================================
 # pipelines/lz-vending.yml
 # Azure Landing Zone Vending — Main Pipeline
 #
 # Stage model:
-#   Stage 1 — Transform          (always)
-#   Stage 2 — Validate (what-if) (always)
-#   Stage 3 — Deploy Subscription (always, approval gate)
-#   Stage 4a — Deploy Approved Workload (condition: ApprovedWorkload)
-#   Stage 4b — Deploy BYO Networking    (condition: BYO)
-#   Stage 5  — Connect vWAN             (condition: workloadType == Private)
+#   Stage 0a — Transform           Pure derivation. Produces lz-context.json artifact.
+#   Stage 0b — Entra Groups        Creates Contributor + Reader security groups.
+#   Stage 0c — Bicep Params        Generates .generated.bicepparam files.
+#   Stage 1  — Validate            What-if against subscription deployment.
+#   Stage 2  — Deploy Subscription Approval gate. Creates subscription via sub-vending.
+#   Stage 3a — Approved Workload   Condition: workloadCategory == ApprovedWorkload
+#   Stage 3b — BYO Networking      Condition: workloadCategory == BYO
+#   Stage 4  — Connect vWAN        Condition: workloadType == Private
 #
-# Trigger: Manual only (V1 ITSM approach — request file committed to repo).
-# ============================================================
+# Artifact flow:
+#   lz-context          → published by 0a, consumed by 0b and 0c
+#   generated-bicep-params → published by 0c, consumed by 1, 2, 3a, 3b
+#   deployment-summary  → published by stage 4
+#
+# Trigger: Manual only (V1 ITSM approach).
+# ==============================================================================
 
 trigger: none
 
@@ -27,85 +34,179 @@ parameters:
     default: 'sc-lz-vending-wif'
 
 variables:
-  # Static pipeline-level variables
-  bicepVersion:        '0.30.3'
-  customerConfigPath:  'config/customer.config.json'
+  bicepVersion:       '0.30.3'
+  customerConfigPath: 'config/customer.config.json'
 
-  # Dynamic variables set by Stage 1 (Transform). Declared here with empty defaults
-  # so downstream stage condition expressions can reference them safely.
+  # Declared at pipeline scope so stage condition expressions can reference them
+  # safely even before Stage 0a runs. Populated by Stage 0a via isOutput=true.
+  lzResourceBaseName:        ''
   lzSubscriptionAliasName:   ''
   lzManagementGroupId:       ''
   lzWorkloadCategory:        ''
   lzWorkloadType:            ''
   lzApprovedWorkloadPattern: ''
-  lzResourceBaseName:        ''
+  lzLocation:                ''
+  lzContributorGroupOid:     ''
+  lzReaderGroupOid:          ''
   lzSpokeVNetResourceId:     ''
 
 pool:
   vmImage: ubuntu-latest
 
-# ==============================================================================
-# Stage 1 — Transform
-# ==============================================================================
 stages:
 
-- stage: Transform
-  displayName: '1 — Transform Request → Bicep Params'
+# ==============================================================================
+# Stage 0a — Transform
+# Pure derivation. No Azure auth required. Produces the immutable lz-context.json.
+# ==============================================================================
+
+- stage: TransformData
+  displayName: '0a — Transform Request'
   jobs:
-  - job: Transform
-    displayName: 'Convert request JSON to .generated.bicepparam files'
+  - job: TransformData
+    displayName: 'Derive all computed values from request + config'
     steps:
 
     - checkout: self
       displayName: 'Checkout repository'
-      persistCredentials: true
 
     - task: PowerShell@2
-      displayName: 'Run Convert-RequestToBicepParams.ps1'
-      name: TransformOutput
+      displayName: 'Invoke-LZVending — Transform'
+      name: LZTransform
       inputs:
-        filePath:          'scripts/Convert-RequestToBicepParams.ps1'
+        filePath: 'scripts/Invoke-LZVending.ps1'
         arguments: >
-          -RequestFilePath  '${{ parameters.requestFilePath }}'
+          -Stage              Transform
+          -RequestFilePath    '${{ parameters.requestFilePath }}'
           -CustomerConfigPath '$(customerConfigPath)'
-          -OutputDirectory  '$(Build.SourcesDirectory)'
+          -OutputDirectory    '$(Build.SourcesDirectory)'
           -SetADOVariables
         pwsh: true
-      env:
-        # vmAdminPassword is passed as a pipeline secret variable.
-        # Set this in the pipeline variable group or as a secret variable.
-        LZ_VM_ADMIN_PASSWORD: $(lzVmAdminPassword)
+        workingDirectory: '$(Build.SourcesDirectory)'
 
-    # Capture the ADO variables emitted by the transform script into
-    # pipeline variables for downstream stages.
-    - bash: |
-        echo "##vso[task.setvariable variable=lzSubscriptionAliasName;isOutput=false]$(TransformOutput.lzSubscriptionAliasName)"
-        echo "##vso[task.setvariable variable=lzManagementGroupId;isOutput=false]$(TransformOutput.lzManagementGroupId)"
-        echo "##vso[task.setvariable variable=lzWorkloadCategory;isOutput=false]$(TransformOutput.lzWorkloadCategory)"
-        echo "##vso[task.setvariable variable=lzWorkloadType;isOutput=false]$(TransformOutput.lzWorkloadType)"
-        echo "##vso[task.setvariable variable=lzApprovedWorkloadPattern;isOutput=false]$(TransformOutput.lzApprovedWorkloadPattern)"
-        echo "##vso[task.setvariable variable=lzResourceBaseName;isOutput=false]$(TransformOutput.lzResourceBaseName)"
-      displayName: 'Promote transform outputs to stage-level variables'
+    - publish: '$(Build.SourcesDirectory)/artifacts/lz-context'
+      artifact: lz-context
+      displayName: 'Publish lz-context artifact (immutable)'
+
+# ==============================================================================
+# Stage 0b — Entra Groups
+# Creates the Contributor and Reader security groups.
+# Requires Azure CLI auth for az ad commands.
+# ==============================================================================
+
+- stage: ProvisionEntraGroups
+  displayName: '0b — Provision Entra Groups'
+  dependsOn: TransformData
+  condition: succeeded('TransformData')
+  variables:
+    # Carry forward routing variables from Stage 0a
+    lzResourceBaseName: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzWorkloadCategory: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
+    lzWorkloadType:     $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+  jobs:
+  - job: ProvisionEntraGroups
+    displayName: 'Create Contributor + Reader groups and assign owner membership'
+    steps:
+
+    - checkout: self
+      displayName: 'Checkout repository'
+
+    - download: current
+      artifact: lz-context
+      displayName: 'Download lz-context artifact'
+
+    - task: AzureCLI@2
+      displayName: 'Invoke-LZVending — EntraGroups'
+      name: LZEntraGroups
+      inputs:
+        azureSubscription: '${{ parameters.serviceConnectionName }}'
+        scriptType:        bash
+        scriptLocation:    inlineScript
+        inlineScript: |
+          pwsh scripts/Invoke-LZVending.ps1 \
+            -Stage               EntraGroups \
+            -ContextArtifactPath "$(Pipeline.Workspace)/lz-context/lz-context.json" \
+            -SetADOVariables
+        workingDirectory: '$(Build.SourcesDirectory)'
+
+# ==============================================================================
+# Stage 0c — Bicep Params
+# Generates all .generated.bicepparam files in a single pass.
+# Group OIDs from Stage 0b are merged into role assignments here so the
+# what-if in Stage 1 is fully representative.
+# ==============================================================================
+
+- stage: GenerateBicepParams
+  displayName: '0c — Generate Bicep Params'
+  dependsOn:
+    - TransformData
+    - ProvisionEntraGroups
+  condition: |
+    and(
+      succeeded('TransformData'),
+      succeeded('ProvisionEntraGroups')
+    )
+  variables:
+    # Routing variables from Stage 0a
+    lzResourceBaseName:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzManagementGroupId:       $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzManagementGroupId'] ]
+    lzWorkloadCategory:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
+    lzWorkloadType:            $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+    lzApprovedWorkloadPattern: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzApprovedWorkloadPattern'] ]
+    lzLocation:                $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
+    # Group OIDs from Stage 0b
+    lzContributorGroupOid:     $[ stageDependencies.ProvisionEntraGroups.ProvisionEntraGroups.outputs['LZEntraGroups.lzContributorGroupOid'] ]
+    lzReaderGroupOid:          $[ stageDependencies.ProvisionEntraGroups.ProvisionEntraGroups.outputs['LZEntraGroups.lzReaderGroupOid'] ]
+  jobs:
+  - job: GenerateBicepParams
+    displayName: 'Generate .generated.bicepparam files with merged role assignments'
+    steps:
+
+    - checkout: self
+      displayName: 'Checkout repository'
+
+    - download: current
+      artifact: lz-context
+      displayName: 'Download lz-context artifact'
+
+    - task: PowerShell@2
+      displayName: 'Invoke-LZVending — BicepParams'
+      name: LZBicepParams
+      inputs:
+        filePath: 'scripts/Invoke-LZVending.ps1'
+        arguments: >
+          -Stage               BicepParams
+          -ContextArtifactPath '$(Pipeline.Workspace)/lz-context/lz-context.json'
+          -ContributorGroupOid '$(lzContributorGroupOid)'
+          -ReaderGroupOid      '$(lzReaderGroupOid)'
+          -OutputDirectory     '$(Build.SourcesDirectory)'
+        pwsh: true
+        workingDirectory: '$(Build.SourcesDirectory)'
 
     - publish: '$(Build.SourcesDirectory)/bicep'
       artifact: generated-bicep-params
-      displayName: 'Publish generated param files as pipeline artifact'
+      displayName: 'Publish generated-bicep-params artifact'
 
 # ==============================================================================
-# Stage 2 — Validate (what-if)
+# Stage 1 — Validate (What-If)
+# Runs az deployment mg what-if so approvers see the full deployment preview
+# including the platform-provisioned role assignments.
 # ==============================================================================
 
 - stage: Validate
-  displayName: '2 — Validate (What-If)'
-  dependsOn: Transform
-  condition: succeeded('Transform')
+  displayName: '1 — Validate (What-If)'
+  dependsOn:
+    - TransformData
+    - GenerateBicepParams
+  condition: |
+    and(
+      succeeded('TransformData'),
+      succeeded('GenerateBicepParams')
+    )
   variables:
-    lzSubscriptionAliasName:   $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzSubscriptionAliasName'] ]
-    lzManagementGroupId:       $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzManagementGroupId'] ]
-    lzWorkloadCategory:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadCategory'] ]
-    lzWorkloadType:            $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadType'] ]
-    lzApprovedWorkloadPattern: $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzApprovedWorkloadPattern'] ]
-    lzResourceBaseName:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzResourceBaseName'] ]
+    lzManagementGroupId: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzManagementGroupId'] ]
+    lzLocation:          $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
+    lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
   jobs:
   - job: WhatIf
     displayName: 'Run what-if on subscription deployment'
@@ -115,7 +216,7 @@ stages:
 
     - download: current
       artifact: generated-bicep-params
-      displayName: 'Download generated param files'
+      displayName: 'Download generated-bicep-params artifact'
 
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
@@ -136,36 +237,39 @@ stages:
         inlineScript: |
           az deployment mg what-if \
             --management-group-id '$(lzManagementGroupId)' \
-            --location '$(Build.Repository.LocalPath)/config/customer.config.json' \
-            --template-file 'bicep/subscription/main.bicep' \
-            --parameters "$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam" \
-            --result-format FullResourcePayloads
+            --location            '$(lzLocation)' \
+            --name                'lz-whatif-$(lzResourceBaseName)-$(Build.BuildId)' \
+            --template-file       'bicep/subscription/main.bicep' \
+            --parameters          '$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam' \
+            --result-format       FullResourcePayloads
         workingDirectory: '$(Build.SourcesDirectory)'
 
 # ==============================================================================
-# Stage 3 — Deploy Subscription  (approval gate before this stage)
+# Stage 2 — Deploy Subscription
+# Approval gate before this stage.
+# Configure in ADO: Pipelines → Environments → lz-vending-approval → Approvals.
 # ==============================================================================
 
 - stage: DeploySubscription
-  displayName: '3 — Deploy Subscription'
-  dependsOn: Validate
-  condition: succeeded('Validate')
+  displayName: '2 — Deploy Subscription'
+  dependsOn:
+    - TransformData
+    - Validate
+  condition: |
+    and(
+      succeeded('TransformData'),
+      succeeded('Validate')
+    )
   variables:
-    lzSubscriptionAliasName:   $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzSubscriptionAliasName'] ]
-    lzManagementGroupId:       $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzManagementGroupId'] ]
-    lzWorkloadCategory:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadCategory'] ]
-    lzWorkloadType:            $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadType'] ]
-    lzApprovedWorkloadPattern: $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzApprovedWorkloadPattern'] ]
-    lzResourceBaseName:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzResourceBaseName'] ]
-  # ── Approval gate ────────────────────────────────────────────────────────────
-  # Configure an environment approval in ADO:
-  #   Pipelines → Environments → lz-vending-approval → Approvals and checks
-  # The pipeline pauses here until an approver reviews the what-if output
-  # and manually approves the deployment.
+    lzManagementGroupId: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzManagementGroupId'] ]
+    lzLocation:          $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
+    lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzWorkloadCategory:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
+    lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
   jobs:
   - deployment: DeploySubscription
-    displayName: 'Deploy subscription via sub-vending module'
-    environment: lz-vending-approval
+    displayName: 'Create subscription via sub-vending AVM module'
+    environment: lz-vending-approval   # ← approval gate
     strategy:
       runOnce:
         deploy:
@@ -175,7 +279,7 @@ stages:
 
           - download: current
             artifact: generated-bicep-params
-            displayName: 'Download generated param files'
+            displayName: 'Download generated-bicep-params artifact'
 
           - task: AzureCLI@2
             displayName: 'Install Bicep CLI'
@@ -196,35 +300,37 @@ stages:
               inlineScript: |
                 RESULT=$(az deployment mg create \
                   --management-group-id '$(lzManagementGroupId)' \
-                  --location '$(customerConfigLocation)' \
-                  --name 'lz-vending-$(lzResourceBaseName)-$(Build.BuildId)' \
-                  --template-file 'bicep/subscription/main.bicep' \
-                  --parameters "$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam" \
+                  --location            '$(lzLocation)' \
+                  --name                'lz-vending-$(lzResourceBaseName)-$(Build.BuildId)' \
+                  --template-file       'bicep/subscription/main.bicep' \
+                  --parameters          '$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam' \
                   --output json)
 
                 SUBSCRIPTION_ID=$(echo "$RESULT" | jq -r '.properties.outputs.subscriptionId.value')
-                echo "Subscription ID: $SUBSCRIPTION_ID"
+                echo "New Subscription ID: $SUBSCRIPTION_ID"
                 echo "##vso[task.setvariable variable=lzNewSubscriptionId;isOutput=true]$SUBSCRIPTION_ID"
               workingDirectory: '$(Build.SourcesDirectory)'
-            env:
-              customerConfigLocation: australiaeast
 
 # ==============================================================================
-# Stage 4a — Deploy Approved Workload
+# Stage 3a — Deploy Approved Workload
+# Condition: workloadCategory == ApprovedWorkload
 # ==============================================================================
 
 - stage: DeployApprovedWorkload
-  displayName: '4a — Deploy Approved Workload'
-  dependsOn: DeploySubscription
+  displayName: '3a — Deploy Approved Workload'
+  dependsOn:
+    - TransformData
+    - DeploySubscription
   condition: |
     and(
       succeeded('DeploySubscription'),
-      eq(stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadCategory'], 'ApprovedWorkload')
+      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'], 'ApprovedWorkload')
     )
   variables:
-    lzApprovedWorkloadPattern: $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzApprovedWorkloadPattern'] ]
-    lzWorkloadType:            $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadType'] ]
-    lzResourceBaseName:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzResourceBaseName'] ]
+    lzApprovedWorkloadPattern: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzApprovedWorkloadPattern'] ]
+    lzWorkloadType:            $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+    lzResourceBaseName:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzLocation:                $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
     lzNewSubscriptionId:       $[ stageDependencies.DeploySubscription.DeploySubscription.outputs['SubDeployOutput.lzNewSubscriptionId'] ]
   jobs:
   - job: DeployApprovedWorkload
@@ -235,7 +341,7 @@ stages:
 
     - download: current
       artifact: generated-bicep-params
-      displayName: 'Download generated param files'
+      displayName: 'Download generated-bicep-params artifact'
 
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
@@ -254,15 +360,18 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          # Normalise pattern to lowercase directory name
-          PATTERN_DIR=$(echo "$(lzApprovedWorkloadPattern)" | tr '[:upper:]' '[:lower:]' | sed 's/containerapps/aca-lza/')
+          # Map pattern name to directory name
+          case "$(lzApprovedWorkloadPattern)" in
+            ContainerApps) PATTERN_DIR="aca-lza" ;;
+            *)             echo "ERROR: Unknown pattern: $(lzApprovedWorkloadPattern)"; exit 1 ;;
+          esac
 
           RESULT=$(az deployment sub create \
             --subscription '$(lzNewSubscriptionId)' \
-            --location 'australiaeast' \
-            --name 'lz-vending-workload-$(lzResourceBaseName)-$(Build.BuildId)' \
+            --location     '$(lzLocation)' \
+            --name         'lz-vending-workload-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file "bicep/approved-workloads/${PATTERN_DIR}/main.bicep" \
-            --parameters "$(Pipeline.Workspace)/generated-bicep-params/approved-workloads/${PATTERN_DIR}/main.generated.bicepparam" \
+            --parameters    "$(Pipeline.Workspace)/generated-bicep-params/approved-workloads/${PATTERN_DIR}/main.generated.bicepparam" \
             --output json)
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.spokeVNetResourceId.value')
@@ -273,31 +382,35 @@ stages:
         LZ_VM_ADMIN_PASSWORD: $(lzVmAdminPassword)
 
 # ==============================================================================
-# Stage 4b — Deploy BYO Networking
+# Stage 3b — Deploy BYO Networking
+# Condition: workloadCategory == BYO
 # ==============================================================================
 
 - stage: DeployBYONetworking
-  displayName: '4b — Deploy BYO Networking'
-  dependsOn: DeploySubscription
+  displayName: '3b — Deploy BYO Networking'
+  dependsOn:
+    - TransformData
+    - DeploySubscription
   condition: |
     and(
       succeeded('DeploySubscription'),
-      eq(stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadCategory'], 'BYO')
+      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'], 'BYO')
     )
   variables:
-    lzWorkloadType:      $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadType'] ]
-    lzResourceBaseName:  $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzResourceBaseName'] ]
+    lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+    lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzLocation:          $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
     lzNewSubscriptionId: $[ stageDependencies.DeploySubscription.DeploySubscription.outputs['SubDeployOutput.lzNewSubscriptionId'] ]
   jobs:
   - job: DeployBYONetworking
-    displayName: 'Deploy BYO VNet and DNS zone links'
+    displayName: 'Deploy BYO VNet, NSG, and DNS zone links'
     steps:
 
     - checkout: self
 
     - download: current
       artifact: generated-bicep-params
-      displayName: 'Download generated param files'
+      displayName: 'Download generated-bicep-params artifact'
 
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
@@ -318,10 +431,10 @@ stages:
         inlineScript: |
           RESULT=$(az deployment sub create \
             --subscription '$(lzNewSubscriptionId)' \
-            --location 'australiaeast' \
-            --name 'lz-vending-networking-$(lzResourceBaseName)-$(Build.BuildId)' \
+            --location     '$(lzLocation)' \
+            --name         'lz-vending-networking-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file 'bicep/networking/main.bicep' \
-            --parameters "$(Pipeline.Workspace)/generated-bicep-params/networking/main.generated.bicepparam" \
+            --parameters    '$(Pipeline.Workspace)/generated-bicep-params/networking/main.generated.bicepparam' \
             --output json)
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.virtualNetworkResourceId.value')
@@ -330,29 +443,32 @@ stages:
         workingDirectory: '$(Build.SourcesDirectory)'
 
 # ==============================================================================
-# Stage 5 — Connect vWAN  (Private workloads only)
+# Stage 4 — Connect vWAN
+# Condition: workloadType == Private
+# Reads spokeVNetResourceId from whichever of 3a or 3b ran.
 # ==============================================================================
 
 - stage: ConnectVWAN
-  displayName: '5 — Connect vWAN Hub'
-  # Depends on whichever of 4a or 4b ran, plus the Transform stage for variables.
-  # Both 4a and 4b set lzSpokeVNetResourceId — Stage 5 consumes whichever ran.
+  displayName: '4 — Connect vWAN Hub'
   dependsOn:
-    - Transform
+    - TransformData
     - DeployApprovedWorkload
     - DeployBYONetworking
   condition: |
     and(
       in(dependencies.DeployApprovedWorkload.result, 'Succeeded', 'Skipped'),
-      in(dependencies.DeployBYONetworking.result, 'Succeeded', 'Skipped'),
+      in(dependencies.DeployBYONetworking.result,    'Succeeded', 'Skipped'),
       not(failed()),
-      eq(stageDependencies.Transform.Transform.outputs['TransformOutput.lzWorkloadType'], 'Private')
+      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'], 'Private')
     )
   variables:
-    lzResourceBaseName:        $[ stageDependencies.Transform.Transform.outputs['TransformOutput.lzResourceBaseName'] ]
-    # Consume spokeVNetResourceId from whichever stage ran
-    lzSpokeVNetResourceIdFromApproved: $[ stageDependencies.DeployApprovedWorkload.DeployApprovedWorkload.outputs['ApprovedWorkloadOutput.lzSpokeVNetResourceId'] ]
-    lzSpokeVNetResourceIdFromBYO:      $[ stageDependencies.DeployBYONetworking.DeployBYONetworking.outputs['BYONetworkingOutput.lzSpokeVNetResourceId'] ]
+    lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzWorkloadCategory:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
+    lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+    lzApprovedWorkloadPattern: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzApprovedWorkloadPattern'] ]
+    # Consume spokeVNetResourceId from whichever stage ran — one will be empty
+    lzSpokeVNetFromApproved: $[ stageDependencies.DeployApprovedWorkload.DeployApprovedWorkload.outputs['ApprovedWorkloadOutput.lzSpokeVNetResourceId'] ]
+    lzSpokeVNetFromBYO:      $[ stageDependencies.DeployBYONetworking.DeployBYONetworking.outputs['BYONetworkingOutput.lzSpokeVNetResourceId'] ]
   jobs:
   - job: ConnectVWAN
     displayName: 'Create vWAN hub connection'
@@ -361,50 +477,50 @@ stages:
     - checkout: self
 
     - task: AzureCLI@2
-      displayName: 'Read vWAN config from customer.config.json'
+      displayName: 'Parse vWAN config from customer.config.json'
       name: VWANConfig
       inputs:
         azureSubscription: '${{ parameters.serviceConnectionName }}'
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          # Parse vwanHubResourceId to extract hub name
-          VWAN_HUB_RESOURCE_ID=$(jq -r '.vwanHubResourceId' config/customer.config.json)
-          VWAN_HUB_RG=$(jq -r '.vwanHubResourceGroupName' config/customer.config.json)
+          VWAN_HUB_RESOURCE_ID=$(jq -r '.vwanHubResourceId'          config/customer.config.json)
+          VWAN_HUB_RG=$(jq -r          '.vwanHubResourceGroupName'   config/customer.config.json)
           VWAN_HUB_NAME=$(echo "$VWAN_HUB_RESOURCE_ID" | awk -F'/' '{print $NF}')
-          VWAN_HUB_SUB=$(echo "$VWAN_HUB_RESOURCE_ID" | awk -F'/' '{print $3}')
+          VWAN_HUB_SUB=$(echo  "$VWAN_HUB_RESOURCE_ID" | awk -F'/' '{print $3}')
 
-          echo "vWAN Hub Name:           $VWAN_HUB_NAME"
-          echo "vWAN Hub Resource Group: $VWAN_HUB_RG"
-          echo "vWAN Hub Subscription:   $VWAN_HUB_SUB"
+          echo "vWAN Hub:  $VWAN_HUB_NAME"
+          echo "vWAN RG:   $VWAN_HUB_RG"
+          echo "vWAN Sub:  $VWAN_HUB_SUB"
 
           echo "##vso[task.setvariable variable=vwanHubName;isOutput=true]$VWAN_HUB_NAME"
-          echo "##vso[task.setvariable variable=vwanHubResourceGroupName;isOutput=true]$VWAN_HUB_RG"
-          echo "##vso[task.setvariable variable=vwanHubSubscriptionId;isOutput=true]$VWAN_HUB_SUB"
+          echo "##vso[task.setvariable variable=vwanHubRg;isOutput=true]$VWAN_HUB_RG"
+          echo "##vso[task.setvariable variable=vwanHubSub;isOutput=true]$VWAN_HUB_SUB"
         workingDirectory: '$(Build.SourcesDirectory)'
 
     - task: AzureCLI@2
-      displayName: 'Resolve spoke VNet resource ID (from whichever stage ran)'
+      displayName: 'Resolve spoke VNet resource ID'
       name: ResolveVNet
       inputs:
         azureSubscription: '${{ parameters.serviceConnectionName }}'
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          # One of the two will be non-empty — use whichever is populated.
-          APPROVED_ID='$(lzSpokeVNetResourceIdFromApproved)'
-          BYO_ID='$(lzSpokeVNetResourceIdFromBYO)'
+          APPROVED_ID='$(lzSpokeVNetFromApproved)'
+          BYO_ID='$(lzSpokeVNetFromBYO)'
 
-          if [ -n "$APPROVED_ID" ] && [ "$APPROVED_ID" != "" ]; then
+          if [ -n "$APPROVED_ID" ] && [ "$APPROVED_ID" != " " ]; then
             SPOKE_VNET_ID="$APPROVED_ID"
-          elif [ -n "$BYO_ID" ] && [ "$BYO_ID" != "" ]; then
+            echo "Resolved from Stage 3a (ApprovedWorkload)"
+          elif [ -n "$BYO_ID" ] && [ "$BYO_ID" != " " ]; then
             SPOKE_VNET_ID="$BYO_ID"
+            echo "Resolved from Stage 3b (BYO)"
           else
-            echo "ERROR: Could not resolve spoke VNet resource ID from either Stage 4a or 4b."
+            echo "ERROR: Could not resolve spoke VNet resource ID from Stage 3a or 3b."
             exit 1
           fi
 
-          echo "Resolved Spoke VNet Resource ID: $SPOKE_VNET_ID"
+          echo "Spoke VNet Resource ID: $SPOKE_VNET_ID"
           echo "##vso[task.setvariable variable=resolvedSpokeVNetId;isOutput=true]$SPOKE_VNET_ID"
 
     - task: AzureCLI@2
@@ -417,34 +533,34 @@ stages:
           CONNECTION_NAME="$(lzResourceBaseName)-vhub-conn"
           SPOKE_VNET_ID='$(ResolveVNet.resolvedSpokeVNetId)'
           VWAN_HUB_NAME='$(VWANConfig.vwanHubName)'
-          VWAN_HUB_RG='$(VWANConfig.vwanHubResourceGroupName)'
-          VWAN_HUB_SUB='$(VWANConfig.vwanHubSubscriptionId)'
+          VWAN_HUB_RG='$(VWANConfig.vwanHubRg)'
+          VWAN_HUB_SUB='$(VWANConfig.vwanHubSub)'
 
           echo "Creating vWAN connection: $CONNECTION_NAME"
-          echo "  Hub:       $VWAN_HUB_NAME"
-          echo "  RG:        $VWAN_HUB_RG"
-          echo "  Sub:       $VWAN_HUB_SUB"
+          echo "  Hub:        $VWAN_HUB_NAME"
+          echo "  RG:         $VWAN_HUB_RG"
+          echo "  Sub:        $VWAN_HUB_SUB"
           echo "  Spoke VNet: $SPOKE_VNET_ID"
 
           az account set --subscription "$VWAN_HUB_SUB"
 
           az network vhub connection create \
-            --name "$CONNECTION_NAME" \
-            --vhub-name "$VWAN_HUB_NAME" \
+            --name         "$CONNECTION_NAME" \
+            --vhub-name    "$VWAN_HUB_NAME" \
             --resource-group "$VWAN_HUB_RG" \
-            --remote-vnet "$SPOKE_VNET_ID" \
+            --remote-vnet  "$SPOKE_VNET_ID" \
             --output table
 
           echo "vWAN connection created successfully."
 
     - task: AzureCLI@2
-      displayName: 'Publish pipeline summary'
+      displayName: 'Publish deployment summary'
       inputs:
         azureSubscription: '${{ parameters.serviceConnectionName }}'
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          cat <<EOF > $(Build.ArtifactStagingDirectory)/lz-vending-summary.md
+          cat > $(Build.ArtifactStagingDirectory)/lz-vending-summary.md << EOF
           # Landing Zone Vending — Deployment Summary
 
           | Field | Value |
@@ -456,6 +572,8 @@ stages:
           | Workload Type | $(lzWorkloadType) |
           | Approved Workload Pattern | $(lzApprovedWorkloadPattern) |
           | Spoke VNet | $(ResolveVNet.resolvedSpokeVNetId) |
+          | Contributor Group | $(lzContributorGroupOid) |
+          | Reader Group | $(lzReaderGroupOid) |
           | Deployed At | $(date -u +"%Y-%m-%dT%H:%M:%SZ") |
           EOF
 
