@@ -32,7 +32,7 @@ param enableTelemetry bool = true
 // ── Module ────────────────────────────────────────────────────────────────────
 
 module virtualNetwork 'br/public:avm/res/network/virtual-network:0.6.1' = {
-  name: 'res-vnet-${uniqueString(virtualNetworkName, location)}'
+  name: 'vnet-${uniqueString(virtualNetworkName, location)}'
   params: {
     name:            virtualNetworkName
     addressPrefixes: [virtualNetworkAddressPrefix]

@@ -26,7 +26,7 @@ param enableTelemetry bool = true
 // ── Module ────────────────────────────────────────────────────────────────────
 
 module networkSecurityGroup 'br/public:avm/res/network/network-security-group:0.4.0' = {
-  name: 'res-nsg-${uniqueString(nsgName, location)}'
+  name: 'nsg-${uniqueString(nsgName, location)}'
   params: {
     name:            nsgName
     location:        location
