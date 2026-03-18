@@ -122,16 +122,24 @@ function Add-LZGroupMemberIfAbsent {
         return
     }
 
-    az ad group member add `
-        --group     $GroupOid `
-        --member-id $MemberOid | Out-Null
+    # Retry up to 5 times with 10 second backoff to handle Entra replication lag
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        az ad group member add `
+            --group     $GroupOid `
+            --member-id $MemberOid | Out-Null
 
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Failed to add member $MemberOid to group $GroupDisplayName. Continuing."
-        return
+        if ($LASTEXITCODE -eq 0) {
+            Write-LZLog "Added member to $GroupDisplayName."
+            return
+        }
+
+        if ($attempt -lt 5) {
+            Write-LZLog "Attempt $attempt failed — waiting 10 seconds for Entra replication..."
+            Start-Sleep -Seconds 10
+        }
     }
 
-    Write-LZLog "Added member to $GroupDisplayName."
+    Write-Warning "Failed to add member $MemberOid to group $GroupDisplayName after 5 attempts. Continuing."
 }
 
 # ── Exported function ──────────────────────────────────────────────────────────
