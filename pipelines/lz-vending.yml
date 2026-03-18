@@ -34,7 +34,6 @@ parameters:
     default: 'sc-lz-vending-wif'
 
 variables:
-  bicepVersion:       '0.30.3'
   customerConfigPath: 'config/customer.config.json'
 
   # Declared at pipeline scope so stage condition expressions can reference them
@@ -218,6 +217,10 @@ stages:
       artifact: generated-bicep-params
       displayName: 'Download generated-bicep-params artifact'
 
+    - bash: |
+        cp -r $(Pipeline.Workspace)/generated-bicep-params/. $(Build.SourcesDirectory)/bicep/
+      displayName: 'Overlay generated param files onto bicep source directory'
+
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
       inputs:
@@ -225,7 +228,7 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          az bicep install --version $(bicepVersion)
+          az bicep install
           az bicep version
 
     - task: AzureCLI@2
@@ -235,13 +238,23 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          az deployment mg what-if \
-            --management-group-id '$(lzManagementGroupId)' \
-            --location            '$(lzLocation)' \
-            --name                'lz-whatif-$(lzResourceBaseName)-$(Build.BuildId)' \
-            --template-file       'bicep/subscription/main.bicep' \
-            --parameters          '$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam' \
-            --result-format       FullResourcePayloads
+          STATUS=1
+          for attempt in 1 2 3; do
+            echo "What-if attempt $attempt of 3..."
+            if az deployment mg what-if \
+              --management-group-id '$(lzManagementGroupId)' \
+              --location            '$(lzLocation)' \
+              --name                'lz-whatif-$(lzResourceBaseName)-$(Build.BuildId)' \
+              --template-file       'bicep/subscription/main.bicep' \
+              --parameters          'bicep/subscription/main.generated.bicepparam' \
+              --result-format       FullResourcePayloads; then
+              STATUS=0
+              break
+            fi
+            echo "Attempt $attempt failed."
+            [ $attempt -lt 3 ] && echo "Waiting 30 seconds before retry..." && sleep 30
+          done
+          exit $STATUS
         workingDirectory: '$(Build.SourcesDirectory)'
 
 # ==============================================================================
@@ -281,6 +294,10 @@ stages:
             artifact: generated-bicep-params
             displayName: 'Download generated-bicep-params artifact'
 
+          - bash: |
+              cp -r $(Pipeline.Workspace)/generated-bicep-params/. $(Build.SourcesDirectory)/bicep/
+            displayName: 'Overlay generated param files onto bicep source directory'
+
           - task: AzureCLI@2
             displayName: 'Install Bicep CLI'
             inputs:
@@ -288,7 +305,8 @@ stages:
               scriptType:        bash
               scriptLocation:    inlineScript
               inlineScript: |
-                az bicep install --version $(bicepVersion)
+                az bicep install
+                az bicep version
 
           - task: AzureCLI@2
             displayName: 'Deploy — Subscription vending'
@@ -303,7 +321,7 @@ stages:
                   --location            '$(lzLocation)' \
                   --name                'lz-vending-$(lzResourceBaseName)-$(Build.BuildId)' \
                   --template-file       'bicep/subscription/main.bicep' \
-                  --parameters          '$(Pipeline.Workspace)/generated-bicep-params/subscription/main.generated.bicepparam' \
+                  --parameters          'bicep/subscription/main.generated.bicepparam' \
                   --output json)
 
                 SUBSCRIPTION_ID=$(echo "$RESULT" | jq -r '.properties.outputs.subscriptionId.value')
@@ -323,8 +341,8 @@ stages:
     - DeploySubscription
   condition: |
     and(
-      succeeded('DeploySubscription'),
-      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'], 'ApprovedWorkload')
+      in(dependencies.DeploySubscription.result, 'Succeeded', 'Skipped'),
+      eq(dependencies.TransformData.outputs['TransformData.LZTransform.lzWorkloadCategory'], 'ApprovedWorkload')
     )
   variables:
     lzApprovedWorkloadPattern: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzApprovedWorkloadPattern'] ]
@@ -343,6 +361,10 @@ stages:
       artifact: generated-bicep-params
       displayName: 'Download generated-bicep-params artifact'
 
+    - bash: |
+        cp -r $(Pipeline.Workspace)/generated-bicep-params/. $(Build.SourcesDirectory)/bicep/
+      displayName: 'Overlay generated param files onto bicep source directory'
+
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
       inputs:
@@ -350,7 +372,8 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          az bicep install --version $(bicepVersion)
+          az bicep install
+          az bicep version
 
     - task: AzureCLI@2
       displayName: 'Deploy — Approved Workload ($(lzApprovedWorkloadPattern))'
@@ -371,7 +394,7 @@ stages:
             --location     '$(lzLocation)' \
             --name         'lz-vending-workload-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file "bicep/approved-workloads/${PATTERN_DIR}/main.bicep" \
-            --parameters    "$(Pipeline.Workspace)/generated-bicep-params/approved-workloads/${PATTERN_DIR}/main.generated.bicepparam" \
+            --parameters    "bicep/approved-workloads/${PATTERN_DIR}/main.generated.bicepparam" \
             --output json)
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.spokeVNetResourceId.value')
@@ -393,8 +416,8 @@ stages:
     - DeploySubscription
   condition: |
     and(
-      succeeded('DeploySubscription'),
-      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'], 'BYO')
+      in(dependencies.DeploySubscription.result, 'Succeeded', 'Skipped'),
+      eq(dependencies.TransformData.outputs['TransformData.LZTransform.lzWorkloadCategory'], 'BYO')
     )
   variables:
     lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
@@ -412,6 +435,10 @@ stages:
       artifact: generated-bicep-params
       displayName: 'Download generated-bicep-params artifact'
 
+    - bash: |
+        cp -r $(Pipeline.Workspace)/generated-bicep-params/. $(Build.SourcesDirectory)/bicep/
+      displayName: 'Overlay generated param files onto bicep source directory'
+
     - task: AzureCLI@2
       displayName: 'Install Bicep CLI'
       inputs:
@@ -419,7 +446,8 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          az bicep install --version $(bicepVersion)
+          az bicep install
+          az bicep version
 
     - task: AzureCLI@2
       displayName: 'Deploy — BYO Networking'
@@ -434,7 +462,7 @@ stages:
             --location     '$(lzLocation)' \
             --name         'lz-vending-networking-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file 'bicep/networking/main.bicep' \
-            --parameters    '$(Pipeline.Workspace)/generated-bicep-params/networking/main.generated.bicepparam' \
+            --parameters    'bicep/networking/main.generated.bicepparam' \
             --output json)
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.virtualNetworkResourceId.value')
@@ -459,7 +487,7 @@ stages:
       in(dependencies.DeployApprovedWorkload.result, 'Succeeded', 'Skipped'),
       in(dependencies.DeployBYONetworking.result,    'Succeeded', 'Skipped'),
       not(failed()),
-      eq(stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'], 'Private')
+      eq(dependencies.TransformData.outputs['TransformData.LZTransform.lzWorkloadType'], 'Private')
     )
   variables:
     lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
