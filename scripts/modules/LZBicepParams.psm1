@@ -22,6 +22,17 @@
 # BUILT-IN ROLE DEFINITION IDs (stable across all Azure tenants):
 #   Contributor : b24988ac-6180-42a0-ab88-20f7382dd24c
 #   Reader      : acdd72a7-3385-48ef-bd42-f606fba81ae7
+#
+# FIX — property name quoting:
+#   Bicep object literals require property names containing non-identifier
+#   characters (dots, hyphens, spaces, etc.) to be single-quoted.
+#   resourceProviders keys such as 'Microsoft.ContainerRegistry' contain dots
+#   and must be rendered as:
+#       'Microsoft.ContainerRegistry': []
+#   not:
+#       Microsoft.ContainerRegistry: []   ← BCP018 parse error
+#   ConvertTo-BicepParamValue now quotes any property name that contains a
+#   character outside [a-zA-Z0-9_].
 # ==============================================================================
 
 Set-StrictMode -Version Latest
@@ -38,6 +49,23 @@ function Write-LZLog {
     param([string]$Message)
     $ts = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss')
     Write-Host "[$ts][INFO] $Message"
+}
+
+function Format-BicepPropertyName {
+    <#
+    .SYNOPSIS
+        Returns a Bicep-safe property name.
+        Names containing characters outside [a-zA-Z0-9_] are single-quoted
+        so that Bicep parses them as string keys rather than identifiers.
+        Examples:
+          BusinessUnit              → BusinessUnit          (no quotes needed)
+          Microsoft.ContainerRegistry → 'Microsoft.ContainerRegistry'  (dot requires quoting)
+    #>
+    param([Parameter(Mandatory)][string]$Name)
+    if ($Name -match '[^a-zA-Z0-9_]') {
+        return "'$($Name -replace "'", "\\'")'"
+    }
+    return $Name
 }
 
 function ConvertTo-BicepParamValue {
@@ -63,8 +91,9 @@ function ConvertTo-BicepParamValue {
             if ($props.Count -eq 0) { return '{}' }
             $lines = @('{')
             foreach ($prop in $props) {
-                $v = ConvertTo-BicepParamValue -Value $prop.Value -IndentLevel ($IndentLevel + 1)
-                $lines += "${indent1}$($prop.Name): $v"
+                $v       = ConvertTo-BicepParamValue -Value $prop.Value -IndentLevel ($IndentLevel + 1)
+                $propKey = Format-BicepPropertyName -Name $prop.Name
+                $lines  += "${indent1}${propKey}: $v"
             }
             $lines += "${indent}}"
             return $lines -join "`n"
@@ -74,7 +103,7 @@ function ConvertTo-BicepParamValue {
             if ($Value.Count -eq 0) { return '[]' }
             $lines = @('[')
             foreach ($item in $Value) {
-                $v = ConvertTo-BicepParamValue -Value $item -IndentLevel ($IndentLevel + 1)
+                $v      = ConvertTo-BicepParamValue -Value $item -IndentLevel ($IndentLevel + 1)
                 $lines += "${indent1}$v"
             }
             $lines += "${indent}]"
@@ -86,8 +115,9 @@ function ConvertTo-BicepParamValue {
                 if ($Value.Count -eq 0) { return '{}' }
                 $lines = @('{')
                 foreach ($key in $Value.Keys) {
-                    $v = ConvertTo-BicepParamValue -Value $Value[$key] -IndentLevel ($IndentLevel + 1)
-                    $lines += "${indent1}${key}: $v"
+                    $v       = ConvertTo-BicepParamValue -Value $Value[$key] -IndentLevel ($IndentLevel + 1)
+                    $dictKey = Format-BicepPropertyName -Name $key
+                    $lines  += "${indent1}${dictKey}: $v"
                 }
                 $lines += "${indent}}"
                 return $lines -join "`n"
