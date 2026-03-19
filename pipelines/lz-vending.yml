@@ -316,15 +316,24 @@ stages:
               scriptType:        bash
               scriptLocation:    inlineScript
               inlineScript: |
-                RESULT=$(az deployment mg create \
+                if ! RESULT=$(az deployment mg create \
                   --management-group-id '$(lzManagementGroupId)' \
                   --location            '$(lzLocation)' \
                   --name                'lz-vending-$(lzResourceBaseName)-$(Build.BuildId)' \
                   --template-file       'bicep/subscription/main.bicep' \
                   --parameters          'bicep/subscription/main.generated.bicepparam' \
-                  --output json)
+                  --output json); then
+                  echo "##[error]Subscription vending deployment failed. Review the ARM error above."
+                  exit 1
+                fi
 
                 SUBSCRIPTION_ID=$(echo "$RESULT" | jq -r '.properties.outputs.subscriptionId.value')
+
+                if [ -z "$SUBSCRIPTION_ID" ] || [ "$SUBSCRIPTION_ID" = "null" ]; then
+                  echo "##[error]Subscription ID not found in deployment output. The deployment may have failed silently."
+                  exit 1
+                fi
+
                 echo "New Subscription ID: $SUBSCRIPTION_ID"
                 echo "##vso[task.setvariable variable=lzNewSubscriptionId;isOutput=true]$SUBSCRIPTION_ID"
               workingDirectory: '$(Build.SourcesDirectory)'
@@ -389,15 +398,24 @@ stages:
             *)             echo "ERROR: Unknown pattern: $(lzApprovedWorkloadPattern)"; exit 1 ;;
           esac
 
-          RESULT=$(az deployment sub create \
+          if ! RESULT=$(az deployment sub create \
             --subscription '$(lzNewSubscriptionId)' \
             --location     '$(lzLocation)' \
             --name         'lz-vending-workload-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file "bicep/approved-workloads/${PATTERN_DIR}/main.bicep" \
             --parameters    "bicep/approved-workloads/${PATTERN_DIR}/main.generated.bicepparam" \
-            --output json)
+            --output json); then
+            echo "##[error]Approved workload deployment failed. Review the ARM error above."
+            exit 1
+          fi
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.spokeVNetResourceId.value')
+
+          if [ -z "$SPOKE_VNET_ID" ] || [ "$SPOKE_VNET_ID" = "null" ]; then
+            echo "##[error]Spoke VNet resource ID not found in deployment output. The deployment may have failed silently."
+            exit 1
+          fi
+
           echo "Spoke VNet Resource ID: $SPOKE_VNET_ID"
           echo "##vso[task.setvariable variable=lzSpokeVNetResourceId;isOutput=true]$SPOKE_VNET_ID"
         workingDirectory: '$(Build.SourcesDirectory)'
@@ -457,15 +475,24 @@ stages:
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          RESULT=$(az deployment sub create \
+          if ! RESULT=$(az deployment sub create \
             --subscription '$(lzNewSubscriptionId)' \
             --location     '$(lzLocation)' \
             --name         'lz-vending-networking-$(lzResourceBaseName)-$(Build.BuildId)' \
             --template-file 'bicep/networking/main.bicep' \
             --parameters    'bicep/networking/main.generated.bicepparam' \
-            --output json)
+            --output json); then
+            echo "##[error]BYO networking deployment failed. Review the ARM error above."
+            exit 1
+          fi
 
           SPOKE_VNET_ID=$(echo "$RESULT" | jq -r '.properties.outputs.virtualNetworkResourceId.value')
+
+          if [ -z "$SPOKE_VNET_ID" ] || [ "$SPOKE_VNET_ID" = "null" ]; then
+            echo "##[error]Spoke VNet resource ID not found in deployment output. The deployment may have failed silently."
+            exit 1
+          fi
+
           echo "Spoke VNet Resource ID: $SPOKE_VNET_ID"
           echo "##vso[task.setvariable variable=lzSpokeVNetResourceId;isOutput=true]$SPOKE_VNET_ID"
         workingDirectory: '$(Build.SourcesDirectory)'
