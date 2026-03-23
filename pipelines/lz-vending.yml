@@ -338,6 +338,23 @@ stages:
                 echo "##vso[task.setvariable variable=lzNewSubscriptionId;isOutput=true]$SUBSCRIPTION_ID"
               workingDirectory: '$(Build.SourcesDirectory)'
 
+  - job: PublishSubscriptionId
+    displayName: 'Relay subscription ID for downstream stages'
+    dependsOn: DeploySubscription
+    variables:
+      lzNewSubscriptionId: $[ dependencies.DeploySubscription.outputs['DeploySubscription.SubDeployOutput.lzNewSubscriptionId'] ]
+    steps:
+    - checkout: none
+    - bash: |
+        if [ -z "$(lzNewSubscriptionId)" ]; then
+          echo "##[error]Subscription ID is empty — Stage 2 deployment may have failed."
+          exit 1
+        fi
+        echo "Relaying Subscription ID: $(lzNewSubscriptionId)"
+        echo "##vso[task.setvariable variable=lzNewSubscriptionId;isOutput=true]$(lzNewSubscriptionId)"
+      name: PublishSubId
+      displayName: 'Re-emit subscription ID as output variable'
+
 # ==============================================================================
 # Stage 3a — Deploy Approved Workload
 # Condition: workloadCategory == ApprovedWorkload
@@ -358,7 +375,7 @@ stages:
     lzWorkloadType:            $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
     lzResourceBaseName:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
     lzLocation:                $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
-    lzNewSubscriptionId:       $[ stageDependencies.DeploySubscription.DeploySubscription.outputs['SubDeployOutput.lzNewSubscriptionId'] ]
+    lzNewSubscriptionId:       $[ stageDependencies.DeploySubscription.PublishSubscriptionId.outputs['PublishSubId.lzNewSubscriptionId'] ]
   jobs:
   - job: DeployApprovedWorkload
     displayName: 'Deploy approved workload pattern ($(lzApprovedWorkloadPattern))'
@@ -441,7 +458,7 @@ stages:
     lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
     lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
     lzLocation:          $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzLocation'] ]
-    lzNewSubscriptionId: $[ stageDependencies.DeploySubscription.DeploySubscription.outputs['SubDeployOutput.lzNewSubscriptionId'] ]
+    lzNewSubscriptionId: $[ stageDependencies.DeploySubscription.PublishSubscriptionId.outputs['PublishSubId.lzNewSubscriptionId'] ]
   jobs:
   - job: DeployBYONetworking
     displayName: 'Deploy BYO VNet, NSG, and DNS zone links'
