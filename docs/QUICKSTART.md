@@ -40,7 +40,27 @@ Replace all placeholder values. This is the only file that should contain enviro
 
 ---
 
-## Step 2 — Grant Microsoft Graph Permissions
+## Step 2 — Register the Pipeline
+
+1. In Azure DevOps, go to **Pipelines → New pipeline → Azure Repos Git**.
+2. Select your repository and point to `pipelines/lz-vending.yml`.
+3. Save (do not run yet).
+
+---
+
+## Step 3 — Create the ADO Service Connection
+
+1. In Azure DevOps, go to **Project Settings → Service Connections → New service connection → Azure Resource Manager**.
+2. Select **Workload Identity Federation (automatic)** or configure manually with a federated credential.
+3. Grant the service principal the following Azure RBAC roles:
+   - `Owner` at the EA enrollment account scope (required for subscription creation)
+   - `Owner` at the management group scope (required for MG placement)
+   - `Contributor` on the vWAN hub resource group (required for Stage 4)
+4. Name the service connection `sc-lz-vending-wif` (or update the `serviceConnectionName` pipeline parameter).
+
+---
+
+## Step 4 — Grant Microsoft Graph Permissions
 
 The pipeline provisions Entra ID security groups in Stage 0b. This requires Microsoft Graph API permissions on the same service principal used by the WIF service connection. These are separate from Azure RBAC and must be granted explicitly.
 
@@ -57,19 +77,7 @@ The pipeline provisions Entra ID security groups in Stage 0b. This requires Micr
 
 ---
 
-## Step 3 — Create the ADO Service Connection
-
-1. In Azure DevOps, go to **Project Settings → Service Connections → New service connection → Azure Resource Manager**.
-2. Select **Workload Identity Federation (automatic)** or configure manually with a federated credential.
-3. Grant the service principal the following Azure RBAC roles:
-   - `Owner` at the EA enrollment account scope (required for subscription creation)
-   - `Owner` at the management group scope (required for MG placement)
-   - `Contributor` on the vWAN hub resource group (required for Stage 4)
-4. Name the service connection `sc-lz-vending-wif` (or update the `serviceConnectionName` pipeline parameter).
-
----
-
-## Step 4 — Configure the ADO Environment (Approval Gate)
+## Step 5 — Configure the ADO Environment (Approval Gate)
 
 1. In Azure DevOps, go to **Pipelines → Environments → New environment**.
 2. Name it `lz-vending-approval`.
@@ -79,7 +87,7 @@ This environment is referenced by Stage 2 (Deploy Subscription). The pipeline pa
 
 ---
 
-## Step 5 — Add the Pipeline Secret Variable
+## Step 6 — Add the Pipeline Secret Variable
 
 The ACA LZA pattern requires a VM admin password for the jump box. Set this as a pipeline secret:
 
@@ -87,14 +95,6 @@ The ACA LZA pattern requires a VM admin password for the jump box. Set this as a
 2. Name: `lzVmAdminPassword`, Value: a strong password, tick **Keep this value secret**.
 
 For BYO workloads this variable is unused but must exist (the pipeline references it).
-
----
-
-## Step 6 — Register the Pipeline
-
-1. In Azure DevOps, go to **Pipelines → New pipeline → Azure Repos Git**.
-2. Select your repository and point to `pipelines/lz-vending.yml`.
-3. Save (do not run yet).
 
 ---
 
