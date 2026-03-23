@@ -44,6 +44,7 @@ variables:
   lzWorkloadCategory:        ''
   lzWorkloadType:            ''
   lzApprovedWorkloadPattern: ''
+  lzHubType:                 ''
   lzLocation:                ''
   lzContributorGroupOid:     ''
   lzReaderGroupOid:          ''
@@ -520,8 +521,8 @@ stages:
 # Reads spokeVNetResourceId from whichever of 3a or 3b ran.
 # ==============================================================================
 
-- stage: ConnectVWAN
-  displayName: '4 — Connect vWAN Hub'
+- stage: ConnectHub
+  displayName: '4 — Connect Hub'
   dependsOn:
     - TransformData
     - DeployApprovedWorkload
@@ -534,40 +535,56 @@ stages:
       eq(dependencies.TransformData.outputs['TransformData.LZTransform.lzWorkloadType'], 'Private')
     )
   variables:
-    lzResourceBaseName:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
-    lzWorkloadCategory:  $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
-    lzWorkloadType:      $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
+    lzResourceBaseName:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzResourceBaseName'] ]
+    lzWorkloadCategory:        $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadCategory'] ]
+    lzWorkloadType:            $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzWorkloadType'] ]
     lzApprovedWorkloadPattern: $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzApprovedWorkloadPattern'] ]
+    lzHubType:                 $[ stageDependencies.TransformData.TransformData.outputs['LZTransform.lzHubType'] ]
     # Consume spokeVNetResourceId from whichever stage ran — one will be empty
     lzSpokeVNetFromApproved: $[ stageDependencies.DeployApprovedWorkload.DeployApprovedWorkload.outputs['ApprovedWorkloadOutput.lzSpokeVNetResourceId'] ]
     lzSpokeVNetFromBYO:      $[ stageDependencies.DeployBYONetworking.DeployBYONetworking.outputs['BYONetworkingOutput.lzSpokeVNetResourceId'] ]
   jobs:
-  - job: ConnectVWAN
-    displayName: 'Create vWAN hub connection'
+  - job: ConnectHub
+    displayName: 'Connect spoke VNet to hub'
     steps:
 
     - checkout: self
 
     - task: AzureCLI@2
-      displayName: 'Parse vWAN config from customer.config.json'
-      name: VWANConfig
+      displayName: 'Parse hub config from customer.config.json'
+      name: HubConfig
       inputs:
         azureSubscription: '${{ parameters.serviceConnectionName }}'
         scriptType:        bash
         scriptLocation:    inlineScript
         inlineScript: |
-          VWAN_HUB_RESOURCE_ID=$(jq -r '.vwanHubResourceId'          config/customer.config.json)
-          VWAN_HUB_RG=$(jq -r          '.vwanHubResourceGroupName'   config/customer.config.json)
-          VWAN_HUB_NAME=$(echo "$VWAN_HUB_RESOURCE_ID" | awk -F'/' '{print $NF}')
-          VWAN_HUB_SUB=$(echo  "$VWAN_HUB_RESOURCE_ID" | awk -F'/' '{print $3}')
+          HUB_TYPE=$(jq -r '.hub.type' config/customer.config.json)
+          echo "Hub type: $HUB_TYPE"
 
-          echo "vWAN Hub:  $VWAN_HUB_NAME"
-          echo "vWAN RG:   $VWAN_HUB_RG"
-          echo "vWAN Sub:  $VWAN_HUB_SUB"
+          if [ "$HUB_TYPE" = "vWAN" ]; then
+            RESOURCE_ID=$(jq -r '.hub.vwanHubResourceId'        config/customer.config.json)
+            HUB_RG=$(jq -r      '.hub.vwanHubResourceGroupName' config/customer.config.json)
 
-          echo "##vso[task.setvariable variable=vwanHubName;isOutput=true]$VWAN_HUB_NAME"
-          echo "##vso[task.setvariable variable=vwanHubRg;isOutput=true]$VWAN_HUB_RG"
-          echo "##vso[task.setvariable variable=vwanHubSub;isOutput=true]$VWAN_HUB_SUB"
+          elif [ "$HUB_TYPE" = "VNet" ]; then
+            RESOURCE_ID=$(jq -r '.hub.vnetHubResourceId'        config/customer.config.json)
+            HUB_RG=$(jq -r      '.hub.vnetHubResourceGroupName' config/customer.config.json)
+
+          else
+            echo "##[error]Unsupported hub.type in customer.config.json: '$HUB_TYPE'. Must be 'vWAN' or 'VNet'."
+            exit 1
+          fi
+
+          HUB_NAME=$(echo "$RESOURCE_ID" | awk -F'/' '{print $NF}')
+          HUB_SUB=$(echo  "$RESOURCE_ID" | awk -F'/' '{print $3}')
+
+          echo "  Hub name: $HUB_NAME"
+          echo "  Hub RG:   $HUB_RG"
+          echo "  Hub sub:  $HUB_SUB"
+
+          echo "##vso[task.setvariable variable=hubResourceId;isOutput=true]$RESOURCE_ID"
+          echo "##vso[task.setvariable variable=hubName;isOutput=true]$HUB_NAME"
+          echo "##vso[task.setvariable variable=hubRg;isOutput=true]$HUB_RG"
+          echo "##vso[task.setvariable variable=hubSub;isOutput=true]$HUB_SUB"
         workingDirectory: '$(Build.SourcesDirectory)'
 
     - task: AzureCLI@2
@@ -596,7 +613,8 @@ stages:
           echo "##vso[task.setvariable variable=resolvedSpokeVNetId;isOutput=true]$SPOKE_VNET_ID"
 
     - task: AzureCLI@2
-      displayName: 'Create vWAN hub connection'
+      displayName: 'Connect — vWAN hub'
+      condition: eq(variables['lzHubType'], 'vWAN')
       inputs:
         azureSubscription: '${{ parameters.serviceConnectionName }}'
         scriptType:        bash
@@ -604,26 +622,77 @@ stages:
         inlineScript: |
           CONNECTION_NAME="$(lzResourceBaseName)-vhub-conn"
           SPOKE_VNET_ID='$(ResolveVNet.resolvedSpokeVNetId)'
-          VWAN_HUB_NAME='$(VWANConfig.vwanHubName)'
-          VWAN_HUB_RG='$(VWANConfig.vwanHubRg)'
-          VWAN_HUB_SUB='$(VWANConfig.vwanHubSub)'
+          HUB_NAME='$(HubConfig.hubName)'
+          HUB_RG='$(HubConfig.hubRg)'
+          HUB_SUB='$(HubConfig.hubSub)'
 
           echo "Creating vWAN connection: $CONNECTION_NAME"
-          echo "  Hub:        $VWAN_HUB_NAME"
-          echo "  RG:         $VWAN_HUB_RG"
-          echo "  Sub:        $VWAN_HUB_SUB"
+          echo "  Hub:        $HUB_NAME"
+          echo "  RG:         $HUB_RG"
+          echo "  Sub:        $HUB_SUB"
           echo "  Spoke VNet: $SPOKE_VNET_ID"
 
-          az account set --subscription "$VWAN_HUB_SUB"
+          az account set --subscription "$HUB_SUB"
 
           az network vhub connection create \
-            --name         "$CONNECTION_NAME" \
-            --vhub-name    "$VWAN_HUB_NAME" \
-            --resource-group "$VWAN_HUB_RG" \
-            --remote-vnet  "$SPOKE_VNET_ID" \
+            --name           "$CONNECTION_NAME" \
+            --vhub-name      "$HUB_NAME" \
+            --resource-group "$HUB_RG" \
+            --remote-vnet    "$SPOKE_VNET_ID" \
             --output table
 
           echo "vWAN connection created successfully."
+
+    - task: AzureCLI@2
+      displayName: 'Connect — VNet hub peering'
+      condition: eq(variables['lzHubType'], 'VNet')
+      inputs:
+        azureSubscription: '${{ parameters.serviceConnectionName }}'
+        scriptType:        bash
+        scriptLocation:    inlineScript
+        inlineScript: |
+          SPOKE_VNET_ID='$(ResolveVNet.resolvedSpokeVNetId)'
+          HUB_RESOURCE_ID='$(HubConfig.hubResourceId)'
+          HUB_NAME='$(HubConfig.hubName)'
+          HUB_RG='$(HubConfig.hubRg)'
+          HUB_SUB='$(HubConfig.hubSub)'
+
+          # Derive spoke VNet name, RG, and subscription from its resource ID
+          SPOKE_VNET_NAME=$(echo "$SPOKE_VNET_ID" | awk -F'/' '{print $NF}')
+          SPOKE_VNET_RG=$(echo   "$SPOKE_VNET_ID" | awk -F'/' '{print $5}')
+          SPOKE_SUB=$(echo       "$SPOKE_VNET_ID" | awk -F'/' '{print $3}')
+
+          echo "Creating VNet hub peering: $(lzResourceBaseName)"
+          echo "  Hub VNet:   $HUB_NAME ($HUB_RG / $HUB_SUB)"
+          echo "  Spoke VNet: $SPOKE_VNET_NAME ($SPOKE_VNET_RG / $SPOKE_SUB)"
+
+          # ── Spoke → Hub ──────────────────────────────────────────────────────
+          az account set --subscription "$SPOKE_SUB"
+
+          az network vnet peering create \
+            --name           "$(lzResourceBaseName)-to-hub" \
+            --resource-group "$SPOKE_VNET_RG" \
+            --vnet-name      "$SPOKE_VNET_NAME" \
+            --remote-vnet    "$HUB_RESOURCE_ID" \
+            --allow-vnet-access \
+            --output table
+
+          echo "Spoke → Hub peering created."
+
+          # ── Hub → Spoke ──────────────────────────────────────────────────────
+          # Requires Network Contributor on the hub VNet resource group.
+          az account set --subscription "$HUB_SUB"
+
+          az network vnet peering create \
+            --name           "hub-to-$(lzResourceBaseName)" \
+            --resource-group "$HUB_RG" \
+            --vnet-name      "$HUB_NAME" \
+            --remote-vnet    "$SPOKE_VNET_ID" \
+            --allow-vnet-access \
+            --output table
+
+          echo "Hub → Spoke peering created."
+          echo "VNet hub peering complete."
 
     - task: AzureCLI@2
       displayName: 'Publish deployment summary'

@@ -250,6 +250,29 @@ function Invoke-LZTransform {
         }
     }
 
+    # ── Hub connectivity config ────────────────────────────────────────────────
+    # Read from customer.config.json — organisational topology decision, not
+    # something the requester controls. Validated here so misconfiguration fails
+    # fast at Stage 0a rather than silently at Stage 4 connection time.
+
+    if (-not $config.PSObject.Properties['hub']) {
+        throw "customer.config.json is missing the 'hub' block. Add hub.type ('vWAN' or 'VNet') and the relevant resource fields."
+    }
+
+    $hubType = $config.hub.type
+
+    if ($hubType -notin @('vWAN', 'VNet')) {
+        throw "customer.config.json hub.type must be 'vWAN' or 'VNet'. Got: '$hubType'"
+    }
+
+    if ($hubType -eq 'vWAN' -and [string]::IsNullOrWhiteSpace($config.hub.vwanHubResourceId)) {
+        throw "customer.config.json hub.vwanHubResourceId must be populated when hub.type is 'vWAN'."
+    }
+
+    if ($hubType -eq 'VNet' -and [string]::IsNullOrWhiteSpace($config.hub.vnetHubResourceId)) {
+        throw "customer.config.json hub.vnetHubResourceId must be populated when hub.type is 'VNet'."
+    }
+
     # ── ApprovedWorkload values ────────────────────────────────────────────────
     $approvedWorkloadPattern = ''
     $subnetLayout            = $null
@@ -296,6 +319,7 @@ function Invoke-LZTransform {
         WorkloadCategory              = $workloadCategory
         WorkloadType                  = $workloadType
         ApprovedWorkloadPattern       = $approvedWorkloadPattern
+        HubType                       = $hubType
 
         # Tags and telemetry
         AllTags                       = $allTags

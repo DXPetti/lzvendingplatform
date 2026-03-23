@@ -18,8 +18,16 @@
     "sandbox": "mg-contoso-sandbox"
   },
 
-  "vwanHubResourceId": "/subscriptions/<hub-subscription-id>/resourceGroups/rg-vwan-hub-prod/providers/Microsoft.Network/virtualHubs/vhub-prod-aue",
-  "vwanHubResourceGroupName": "rg-vwan-hub-prod",
+  "hub": {
+    "_comment": "type must be 'vWAN' or 'VNet'. Populate only the fields for the chosen type. This is an organisational topology decision — not set per-request.",
+    "type": "vWAN",
+
+    "vwanHubResourceId": "/subscriptions/<hub-subscription-id>/resourceGroups/rg-vwan-hub-prod/providers/Microsoft.Network/virtualHubs/vhub-prod-aue",
+    "vwanHubResourceGroupName": "rg-vwan-hub-prod",
+
+    "vnetHubResourceId": "",
+    "vnetHubResourceGroupName": ""
+  },
 
   "privateDnsZones": [
     "/subscriptions/<dns-subscription-id>/resourceGroups/rg-privatedns-prod/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net",

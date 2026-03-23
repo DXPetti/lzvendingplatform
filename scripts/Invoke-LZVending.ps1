@@ -173,6 +173,7 @@ switch ($Stage) {
             Set-ADOVariable 'lzWorkloadCategory'        $context.WorkloadCategory
             Set-ADOVariable 'lzWorkloadType'            $context.WorkloadType
             Set-ADOVariable 'lzApprovedWorkloadPattern' $context.ApprovedWorkloadPattern
+            Set-ADOVariable 'lzHubType'                 $context.HubType
             Set-ADOVariable 'lzLocation'                $context.Location
         }
 
