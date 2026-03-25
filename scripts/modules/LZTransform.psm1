@@ -75,6 +75,84 @@ function Get-LZEnvPrefix {
     }
 }
 
+function Get-LZBYOSubnetLayout {
+    <#
+    .SYNOPSIS
+        Derives BYO subnet names and CIDRs from the VNet CIDR, environment,
+        and workload name.
+
+    .DESCRIPTION
+        Production — single subnet covering the full VNet address space:
+          snet-<workloadName>
+
+        NonProduction — three equal subnets for dev, test, and UAT:
+          snet-<workloadName>-dev    lower third
+          snet-<workloadName>-test   middle third
+          snet-<workloadName>-uat    upper third
+
+        "Equal thirds" uses the largest power-of-2 block that fits three times
+        within the VNet. Subnet prefix = VNet prefix + 2.
+
+          VNet size   Each subnet   Used   Unused
+          /27  (32)   /29  (8)       24       8
+          /26  (64)   /28  (16)      48      16
+          /25 (128)   /27  (32)      96      32
+
+        The unused space remains part of the VNet address block but is not
+        assigned to any subnet. Workload teams cannot accidentally use it.
+
+        All supported VNet sizes (/27, /26, /25) fit within a single /24 boundary
+        so fourth-octet arithmetic is sufficient for all offset calculations.
+
+    .OUTPUTS
+        Array of PSCustomObject with properties: name, addressPrefix
+        (camelCase to match Bicep parameter conventions)
+    #>
+    param(
+        [Parameter(Mandatory)][string]$VNetCidr,
+        [Parameter(Mandatory)][string]$Environment,
+        [Parameter(Mandatory)][string]$WorkloadName
+    )
+
+    $parts      = $VNetCidr -split '/'
+    $baseIp     = $parts[0]
+    $vnetPrefix = [int]$parts[1]
+    $octets     = $baseIp.Split('.')
+    $o1 = [int]$octets[0]
+    $o2 = [int]$octets[1]
+    $o3 = [int]$octets[2]
+    $o4 = [int]$octets[3]
+
+    if ($Environment -eq 'Production') {
+        return @(
+            [PSCustomObject]@{
+                name          = "snet-$WorkloadName"
+                addressPrefix = $VNetCidr
+            }
+        )
+    }
+
+    # NonProduction: subnet prefix = VNet prefix + 2
+    # (largest power-of-2 block fitting three times within the VNet)
+    $subnetPrefix = $vnetPrefix + 2
+    $subnetSize   = [int][Math]::Pow(2, 32 - $subnetPrefix)
+
+    return @(
+        [PSCustomObject]@{
+            name          = "snet-$WorkloadName-dev"
+            addressPrefix = "$o1.$o2.$o3.$($o4)/$subnetPrefix"
+        }
+        [PSCustomObject]@{
+            name          = "snet-$WorkloadName-test"
+            addressPrefix = "$o1.$o2.$o3.$($o4 + $subnetSize)/$subnetPrefix"
+        }
+        [PSCustomObject]@{
+            name          = "snet-$WorkloadName-uat"
+            addressPrefix = "$o1.$o2.$o3.$($o4 + 2 * $subnetSize)/$subnetPrefix"
+        }
+    )
+}
+
 function Get-LZACASubnetLayout {
     <#
     .SYNOPSIS
@@ -237,16 +315,21 @@ function Invoke-LZTransform {
     $vnetCidr    = $null
     $vnetName    = $null
     $vnetRgName  = $null
+    $vnetSubnets = $null
     $dnsZoneIds  = @()
 
     if ($workloadCategory -eq 'BYO') {
         if (-not $request.PSObject.Properties['networkSize'])   { throw "networkSize is required for BYO workloads." }
         if (-not $request.PSObject.Properties['baseIpAddress']) { throw "baseIpAddress is required for BYO workloads." }
 
-        $cidrLength = Get-LZCidrFromNetworkSize -NetworkSize $request.networkSize
-        $vnetCidr   = "$($request.baseIpAddress)/$cidrLength"
-        $vnetName   = "vnet-$resourceBaseName"
-        $vnetRgName = "rg-$resourceBaseName-networking"
+        $cidrLength  = Get-LZCidrFromNetworkSize -NetworkSize $request.networkSize
+        $vnetCidr    = "$($request.baseIpAddress)/$cidrLength"
+        $vnetName    = "vnet-$resourceBaseName"
+        $vnetRgName  = "rg-$resourceBaseName-networking"
+        $vnetSubnets = Get-LZBYOSubnetLayout `
+            -VNetCidr    $vnetCidr `
+            -Environment $environment `
+            -WorkloadName $workloadName
 
         if ($workloadType -eq 'Private') {
             $dnsZoneIds = @($config.privateDnsZones)
@@ -317,6 +400,7 @@ function Invoke-LZTransform {
         BillingScope                  = $billingScope
         SubscriptionWorkload          = $subscriptionWorkload
         Location                      = $location
+        Environment                   = $environment
 
         # Routing
         WorkloadCategory              = $workloadCategory
@@ -340,6 +424,7 @@ function Invoke-LZTransform {
         VNetCidr                      = $vnetCidr
         VNetName                      = $vnetName
         VNetRgName                    = $vnetRgName
+        VNetSubnets                   = $vnetSubnets
         DnsZoneIds                    = $dnsZoneIds
         DnsZonesSubscriptionId        = $config.dnsZonesSubscriptionId
         DnsZonesResourceGroupName     = $config.dnsZonesResourceGroupName

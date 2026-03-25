@@ -8,6 +8,22 @@
 //   3. Virtual Network        — modules/vnet.bicep → avm/res/network/virtual-network:0.6.1
 //   4. DNS Zone VNet Links    — modules/dns-zone-links.bicep (Private workloads only)
 //                               One module call per DNS zone, scoped to DNS zones RG.
+//
+// SUBNET LAYOUT (derived by LZTransform.psm1, passed via subnets param):
+//   Production:    1 subnet  — snet-<workloadName>         (full VNet CIDR)
+//   NonProduction: 3 subnets — snet-<workloadName>-dev
+//                              snet-<workloadName>-test
+//                              snet-<workloadName>-uat
+//
+// NSG RULES:
+//   Production:    No rules. Internet enforcement is the hub firewall's job.
+//                  The Azure Load Balancer probe rule is also omitted — internal
+//                  LBs in a private spoke use RFC 1918 addresses and do not
+//                  require the AzureLoadBalancer service tag.
+//   NonProduction: One intra-VNet deny rule prevents lateral movement between
+//                  the dev/test/uat subnets. Source is the VNet CIDR specifically
+//                  (not the VirtualNetwork service tag, which covers all peered
+//                  address spaces and would block hub-sourced traffic).
 // ============================================================
 
 targetScope = 'subscription'
@@ -26,9 +42,16 @@ param virtualNetworkName string
 @description('Required. Name of the resource group to create for networking resources.')
 param virtualNetworkResourceGroupName string
 
+@description('Required. Subnet definitions — name and addressPrefix per entry. Derived by LZTransform.psm1.')
+param subnets array
+
 @description('Required. Connectivity model — determines DNS zone linking behaviour.')
 @allowed(['Private', 'Public', 'Sandbox'])
 param workloadType string
+
+@description('Required. Deployment environment — determines NSG rule set.')
+@allowed(['Production', 'NonProduction'])
+param environment string
 
 @description('Required. Tags to apply to all resources.')
 param resourceTags object
@@ -50,10 +73,31 @@ param enableTelemetry bool = true
 var nsgName   = 'nsg-${virtualNetworkName}'
 var isPrivate = workloadType == 'Private'
 
+// NonProduction intra-VNet deny rule.
+// Source is the VNet CIDR — NOT the VirtualNetwork service tag.
+// The service tag covers all peered address spaces and would block
+// hub-sourced traffic. Using the specific VNet CIDR restricts the
+// deny to intra-VNet lateral movement only.
+var nonProdIntraVNetDenyRule = [
+  {
+    name: 'Deny-Inbound-IntraVNet'
+    properties: {
+      priority:                 900
+      direction:                'Inbound'
+      access:                   'Deny'
+      protocol:                 '*'
+      sourcePortRange:          '*'
+      destinationPortRange:     '*'
+      sourceAddressPrefix:      virtualNetworkAddressPrefix
+      destinationAddressPrefix: 'VirtualNetwork'
+      description:              'Deny inbound lateral movement between subnets within this VNet. Does not affect hub-sourced traffic.'
+    }
+  }
+]
+
+var nsgSecurityRules = environment == 'NonProduction' ? nonProdIntraVNetDenyRule : []
+
 // ── Step 1: Resource Group ─────────────────────────────────────────────────────
-//
-// Version 0.4.1 — pinned.
-// Verify latest at: https://github.com/Azure/bicep-registry-modules/tree/main/avm/res/resources/resource-group
 
 module networkingRg 'br/public:avm/res/resources/resource-group:0.4.1' = {
   name: 'rg-${uniqueString(virtualNetworkResourceGroupName, location)}'
@@ -67,25 +111,29 @@ module networkingRg 'br/public:avm/res/resources/resource-group:0.4.1' = {
 
 // ── Step 2: NSG ────────────────────────────────────────────────────────────────
 //
-// Deployed into the networking RG via a scoped module call.
-// The NSG module wraps avm/res/network/network-security-group.
+// A single NSG shared across all subnets in the VNet.
+// Production: no rules — hub firewall is the enforcement point.
+// NonProduction: intra-VNet deny rule to prevent lateral movement
+// between dev/test/uat subnets.
 
 module nsg 'modules/nsg.bicep' = {
   name: 'nsg-${uniqueString(nsgName, location)}'
   scope: resourceGroup(virtualNetworkResourceGroupName)
   dependsOn: [networkingRg]
   params: {
-    nsgName:         nsgName
-    location:        location
-    resourceTags:    resourceTags
-    enableTelemetry: enableTelemetry
+    nsgName:                 nsgName
+    location:                location
+    resourceTags:            resourceTags
+    additionalSecurityRules: nsgSecurityRules
+    enableTelemetry:         enableTelemetry
   }
 }
 
 // ── Step 3: Virtual Network ────────────────────────────────────────────────────
 //
-// Deployed into the networking RG via a scoped module call.
-// The VNet module wraps avm/res/network/virtual-network and associates the NSG.
+// Subnet definitions (name + addressPrefix) are passed in from the generated
+// bicepparam. vnet.bicep applies the NSG association and network policies
+// uniformly across all subnets via a for loop, so the param file stays clean.
 
 module vnet 'modules/vnet.bicep' = {
   name: 'vnet-${uniqueString(virtualNetworkName, location)}'
@@ -93,6 +141,7 @@ module vnet 'modules/vnet.bicep' = {
   params: {
     virtualNetworkName:          virtualNetworkName
     virtualNetworkAddressPrefix: virtualNetworkAddressPrefix
+    subnets:                     subnets
     nsgResourceId:               nsg.outputs.nsgResourceId
     location:                    location
     resourceTags:                resourceTags
@@ -108,11 +157,6 @@ module vnet 'modules/vnet.bicep' = {
 //   Bicep BCP139 prohibits resource blocks from using scope: resourceGroup(x, y)
 //   when the file's targetScope is 'subscription'. Only module calls support this.
 //   Each zone gets one module call, scoped to the DNS zones resource group.
-//
-// HOW THE LOOP WORKS:
-//   isPrivate ? privateDnsZoneResourceIds : [] ensures the loop body is empty
-//   for non-Private workloads (condition-in-loop pattern avoids a conditional
-//   module array which requires Bicep 0.25+ and is harder to read).
 
 module dnsZoneLinks 'modules/dns-zone-links.bicep' = [
   for (zoneResourceId, i) in (isPrivate ? privateDnsZoneResourceIds : []): {
@@ -128,7 +172,7 @@ module dnsZoneLinks 'modules/dns-zone-links.bicep' = [
 
 // ── Outputs ────────────────────────────────────────────────────────────────────
 
-@description('Resource ID of the spoke VNet. Consumed by Stage 5 (vWAN connection).')
+@description('Resource ID of the spoke VNet. Consumed by Stage 4 (hub connection).')
 output virtualNetworkResourceId string = vnet.outputs.vnetResourceId
 
 @description('Name of the spoke virtual network.')

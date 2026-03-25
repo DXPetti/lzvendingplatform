@@ -274,16 +274,18 @@ function New-LZBicepParams {
         Write-LZLog "Generating BYO networking params..."
 
         $netParams = [ordered]@{
-            dnsZonesResourceGroupName      = $Context.DnsZonesResourceGroupName
-            dnsZonesSubscriptionId         = $Context.DnsZonesSubscriptionId
-            enableTelemetry                = $Context.EnableTelemetry
-            location                       = $Context.Location
-            privateDnsZoneResourceIds      = $(if ($Context.DnsZoneIds) { @($Context.DnsZoneIds) } else { @() })
-            resourceTags                   = $Context.AllTags
-            virtualNetworkAddressPrefix    = $Context.VNetCidr
-            virtualNetworkName             = $Context.VNetName
+            dnsZonesResourceGroupName       = $Context.DnsZonesResourceGroupName
+            dnsZonesSubscriptionId          = $Context.DnsZonesSubscriptionId
+            enableTelemetry                 = $Context.EnableTelemetry
+            environment                     = $Context.Environment
+            location                        = $Context.Location
+            privateDnsZoneResourceIds       = $(if ($Context.DnsZoneIds) { @($Context.DnsZoneIds) } else { @() })
+            resourceTags                    = $Context.AllTags
+            subnets                         = $Context.VNetSubnets
+            virtualNetworkAddressPrefix     = $Context.VNetCidr
+            virtualNetworkName              = $Context.VNetName
             virtualNetworkResourceGroupName = $Context.VNetRgName
-            workloadType                   = $Context.WorkloadType
+            workloadType                    = $Context.WorkloadType
         }
 
         New-BicepParamFile `
