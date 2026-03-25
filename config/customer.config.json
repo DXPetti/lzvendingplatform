@@ -7,6 +7,8 @@
     "orgShortName": "contoso"
   },
 
+  "enableTelemetry": false,
+
   "billingScopes": {
     "production": "/providers/Microsoft.Billing/billingAccounts/<billingAccountId>/enrollmentAccounts/<enrollmentAccountId-prod>",
     "nonProduction": "/providers/Microsoft.Billing/billingAccounts/<billingAccountId>/enrollmentAccounts/<enrollmentAccountId-dev>"

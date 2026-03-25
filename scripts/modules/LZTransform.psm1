@@ -223,9 +223,12 @@ function Invoke-LZTransform {
         $resourceProviders = $request.resourceProviders
     }
 
-    $enableTelemetry = if ($request.PSObject.Properties['enableTelemetry']) {
-        [bool]$request.enableTelemetry
-    } else { $true }
+    $enableTelemetry = if ($config.PSObject.Properties['enableTelemetry']) {
+        [bool]$config.enableTelemetry
+    } else {
+        Write-Warning "enableTelemetry not found in customer.config.json — defaulting to false."
+        $false
+    }
 
     # Owner email — used by LZEntraGroups to add member to contributor group
     $ownerEmail = $request.tags.Owner

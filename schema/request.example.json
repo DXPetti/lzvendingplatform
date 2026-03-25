@@ -26,7 +26,6 @@
         "Microsoft.KeyVault": [],
         "Microsoft.Network": []
       },
-      "enableTelemetry": true,
       "tags": {
         "BusinessUnit": "Retail",
         "CostCentre": "CC-1234",
@@ -57,7 +56,6 @@
         "Microsoft.Web": [],
         "Microsoft.Insights": []
       },
-      "enableTelemetry": true,
       "tags": {
         "BusinessUnit": "Marketing",
         "CostCentre": "CC-5678",
@@ -98,7 +96,6 @@
         "Microsoft.KeyVault": [],
         "Microsoft.Insights": []
       },
-      "enableTelemetry": true,
       "tags": {
         "BusinessUnit": "Payments",
         "CostCentre": "CC-9012",

@@ -156,12 +156,6 @@
       }
     },
 
-    "enableTelemetry": {
-      "type": "boolean",
-      "description": "Enable AVM deployment telemetry.",
-      "default": true
-    },
-
     "tags": {
       "type": "object",
       "description": "Mandatory request tags. Four additional tags are appended by the pipeline at deploy time.",
