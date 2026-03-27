@@ -5,7 +5,7 @@
 - Azure DevOps organisation and project
 - EA billing account with at least two enrollment accounts (Production, NonProduction)
 - Existing Management Group hierarchy (Corp, Online, Sandbox)
-- Existing Azure vWAN hub (for Private workloads)
+- Existing hub — Azure vWAN hub or hub VNet (for Private workloads)
 - Existing private DNS zones resource group (for Private workloads)
 - Service principal or managed identity with permissions to create subscriptions at the EA enrollment account scope
 
@@ -30,8 +30,13 @@ Replace all placeholder values. This is the only file that should contain enviro
     "online":  "mg-contoso-online",
     "sandbox": "mg-contoso-sandbox"
   },
-  "vwanHubResourceId":          "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualHubs/<hub>",
-  "vwanHubResourceGroupName":   "rg-vwan-hub-prod",
+  "hub": {
+    "type": "vWAN",
+    "vwanHubResourceId":        "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualHubs/<hub>",
+    "vwanHubResourceGroupName": "rg-vwan-hub-prod",
+    "vnetHubResourceId":        "",
+    "vnetHubResourceGroupName": ""
+  },
   "privateDnsZones":            [ "<zone-resource-id>", "..." ],
   "dnsZonesSubscriptionId":     "<dns-sub-id>",
   "dnsZonesResourceGroupName":  "rg-privatedns-prod"
@@ -55,7 +60,7 @@ Replace all placeholder values. This is the only file that should contain enviro
 3. Grant the service principal the following Azure RBAC roles:
    - `Owner` at the EA enrollment account scope (required for subscription creation)
    - `Owner` at the management group scope (required for MG placement)
-   - `Contributor` on the vWAN hub resource group (required for Stage 4)
+   - `Contributor` on the hub resource group (required for Stage 4 — vWAN hub RG or VNet hub RG)
 4. Name the service connection `sc-lz-vending-wif` (or update the `serviceConnectionName` pipeline parameter).
 
 ---
@@ -198,7 +203,7 @@ The pipeline will:
 5. **Pause for approval** — the pipeline waits here. Review the what-if output in the stage logs, then approve the `lz-vending-approval` environment check.
 6. **2 — Deploy Subscription:** Create the subscription and place it in the correct management group. Role assignments (including the two platform groups) are applied.
 7. **3a or 3b — Networking / Workload:** Deploy BYO networking or the approved workload pattern into the new subscription.
-8. **4 — Connect vWAN** (Private workloads only): Connect the spoke VNet to the vWAN hub.
+8. **4 — Connect hub** (Private workloads only): Connect the spoke VNet to the hub (vWAN connection or VNet peering, based on `hub.type` in `customer.config.json`).
 9. Publish a deployment summary artifact.
 
 ---

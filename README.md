@@ -13,7 +13,7 @@ A generic, reusable platform for provisioning Azure Landing Zones via an Azure D
 | Entra ID RBAC groups | Two security groups provisioned per LZ: `<name>-contributor` and `<name>-reader`. LZ owner auto-added to contributor group. |
 | BYO networking | VNet, NSG, subnets, private DNS zone links |
 | Approved workloads | ACA Landing Zone Accelerator (ContainerApps pattern) |
-| vWAN connectivity | Hub connection created post-deployment via CLI |
+| Hub connectivity | Hub connection created post-deployment via CLI (vWAN or VNet hub) |
 | Tagging | 5 mandatory request tags + 4 pipeline-derived tags |
 | ITSM integration | V1: JSON file committed to repo, pipeline triggered manually |
 
@@ -27,7 +27,7 @@ lz-vending/
 │   ├── request.schema.json          # JSON Schema (draft-07) for request validation
 │   └── request.example.json         # 3 example scenarios
 ├── config/
-│   └── customer.config.json         # All customer-specific values (MGs, billing, vWAN, DNS)
+│   └── customer.config.json         # All customer-specific values (MGs, billing, hub, DNS)
 ├── bicep/
 │   ├── subscription/                # Stage 2 — always runs
 │   │   ├── main.bicep
@@ -72,16 +72,16 @@ The transform module is always called first by the orchestrator — even in stag
 ## Deployment Paths
 
 ### BYO (Bring Your Own)
-Caller provides networking parameters. Platform creates the subscription, Entra groups, VNet, NSG, and optionally links private DNS zones and connects to vWAN.
+Caller provides networking parameters. Platform creates the subscription, Entra groups, VNet, NSG, and optionally links private DNS zones and connects to the hub.
 
-| `workloadType` | Management Group | vWAN | DNS Zone Links |
+| `workloadType` | Management Group | Hub connection | DNS Zone Links |
 |---|---|---|---|
 | `Private` | Corp | ✅ | ✅ |
 | `Public` | Online | ❌ | ❌ |
 | `Sandbox` | Sandbox | ❌ | ❌ |
 
 ### ApprovedWorkload
-Caller selects a pre-validated pattern. Platform deploys the full pattern including its own networking via the relevant LZA AVM module. Entra groups are provisioned in the same way as BYO. vWAN is connected via CLI in Stage 4 if `workloadType == Private`.
+Caller selects a pre-validated pattern. Platform deploys the full pattern including its own networking via the relevant LZA AVM module. Entra groups are provisioned in the same way as BYO. Hub connectivity is established via CLI in Stage 4 if `workloadType == Private`.
 
 | `pattern` | Module | Status |
 |---|---|---|
@@ -108,7 +108,7 @@ Group creation is idempotent — re-running the pipeline on the same request reu
 ## Key Design Constraints
 
 - `virtualNetworkEnabled` is **always `false`** in the sub-vending call. Networking is never owned by subscription vending.
-- `hubVirtualNetworkResourceId` is **always `''`** in the ACA LZA wrapper. vWAN hubs (`Microsoft.Network/virtualHubs`) are a different resource type from VNet peers — ARM would reject the ID. vWAN connectivity is handled by `az network vhub connection create` in Stage 4.
+- `hubVirtualNetworkResourceId` is **always `''`** in the ACA LZA wrapper. vWAN hubs (`Microsoft.Network/virtualHubs`) are a different resource type from VNet peers — ARM would reject the ID. Hub connectivity is handled via CLI in Stage 4 for both vWAN and VNet hub topologies.
 - All customer-specific values are isolated in `customer.config.json`. No hardcoded values exist in Bicep or pipeline YAML.
 - All AVM module references use pinned versions.
 - `LZTransform.psm1` is the only place naming and derivation logic lives. Nothing else in the pipeline derives these values independently.
@@ -120,7 +120,7 @@ Group creation is idempotent — re-running the pipeline on the same request reu
 | Module | Version |
 |---|---|
 | `avm/ptn/lz/sub-vending` | `0.6.0` |
-| `avm/ptn/aca-lza/hosting-environment` | verify at deploy time |
+| `avm/ptn/aca-lza/hosting-environment` | `0.6.2` |
 | `avm/res/resources/resource-group` | `0.4.1` |
 | `avm/res/network/network-security-group` | `0.4.0` |
 | `avm/res/network/virtual-network` | `0.6.1` |

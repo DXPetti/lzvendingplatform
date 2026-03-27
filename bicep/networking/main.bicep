@@ -1,6 +1,6 @@
 // ============================================================
 // bicep/networking/main.bicep
-// Step 3 — BYO Networking (runs only when workloadCategory == 'BYO')
+// Stage 3b — BYO Networking (runs only when workloadCategory == 'BYO')
 //
 // Orchestrates the following in order:
 //   1. Resource Group         — avm/res/resources/resource-group:0.4.1

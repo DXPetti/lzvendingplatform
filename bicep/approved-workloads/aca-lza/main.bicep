@@ -1,6 +1,6 @@
 // ============================================================
 // bicep/approved-workloads/aca-lza/main.bicep
-// Step 2 — Approved Workload: Container Apps LZA
+// Stage 3a — Approved Workload: Container Apps LZA
 // (runs only when workloadCategory == 'ApprovedWorkload' and pattern == 'ContainerApps')
 //
 // Thin wrapper around avm/ptn/aca-lza/hosting-environment.
@@ -10,8 +10,9 @@
 //   The LZA module accepts a VNet resource ID for hub peering.
 //   Azure vWAN hubs are Microsoft.Network/virtualHubs — a different resource type.
 //   Passing a vWAN hub ID here would fail ARM validation.
-//   vWAN connectivity is handled by Step 4 in the pipeline:
-//     az network vhub connection create
+//   Hub connectivity is handled by Stage 4 in the pipeline:
+//     az network vhub connection create  (vWAN)
+//     az network vnet peering create     (VNet hub)
 //   after this module outputs spokeVNetResourceId.
 
 targetScope = 'subscription'
@@ -72,7 +73,7 @@ param enableTelemetry bool = true
 
 // NOTE: hubVirtualNetworkResourceId is hardcoded to ''.
 // Do NOT add it as a parameter — it must never be set here.
-// vWAN connectivity is the responsibility of Step 4 in the pipeline.
+// Hub connectivity is the responsibility of Stage 4 in the pipeline.
 
 module acaLza 'br/public:avm/ptn/aca-lza/hosting-environment:0.6.2' = {
   name: 'acaLza-${workloadName}'
@@ -93,7 +94,7 @@ module acaLza 'br/public:avm/ptn/aca-lza/hosting-environment:0.6.2' = {
     enableApplicationInsights                  : enableApplicationInsights
     enableDaprInstrumentation                  : enableDaprInstrumentation
 
-    // Hub networking — intentionally empty. vWAN connected via Step 4 pipeline CLI.
+    // Hub networking — intentionally empty. Hub connectivity handled by Stage 4 pipeline CLI.
     hubVirtualNetworkResourceId                : ''
 
     // Jump box — no OS by default. Override for debugging only.
@@ -107,5 +108,5 @@ module acaLza 'br/public:avm/ptn/aca-lza/hosting-environment:0.6.2' = {
 
 // ── Outputs ───────────────────────────────────────────────────────────────────
 
-@description('Resource ID of the ACA LZA spoke virtual network. Consumed by Step 4 (vWAN connection).')
+@description('Resource ID of the ACA LZA spoke virtual network. Consumed by Stage 4 (hub connection).')
 output spokeVNetResourceId string = acaLza.outputs.spokeVNetResourceId

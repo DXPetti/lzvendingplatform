@@ -29,7 +29,7 @@ flowchart TD
     S3A --> VWAN{workloadType<br>== Private?}
     S3B --> VWAN
 
-    VWAN -- Yes --> S4["Stage 4 — Connect vWAN<br>az network vhub connection create<br>Reads spokeVNetResourceId from<br>whichever Stage 3 ran"]
+    VWAN -- Yes --> S4["Stage 4 — Connect Hub<br>vWAN: az network vhub connection create<br>VNet: az network vnet peering create (×2)<br>Reads spokeVNetResourceId from<br>whichever Stage 3 ran"]
     VWAN -- No --> END([Done])
     S4 --> END
 ```
@@ -107,7 +107,7 @@ flowchart LR
     subgraph Azure
         MGMT[Management Group]
         NEWSUB[New Subscription]
-        VHUB[vWAN Virtual Hub]
+        VHUB[Hub — vWAN or VNet]
     end
 
     REQ --> INV
@@ -135,7 +135,7 @@ flowchart LR
 |---|---|---|
 | `workloadCategory` | `BYO` | Stage 3b runs; Stage 3a skipped |
 | `workloadCategory` | `ApprovedWorkload` | Stage 3a runs; Stage 3b skipped |
-| `workloadType` | `Private` | Corp MG · Stage 4 vWAN connect · DNS zone links |
+| `workloadType` | `Private` | Corp MG · Stage 4 hub connect · DNS zone links |
 | `workloadType` | `Public` | Online MG · no peering |
 | `workloadType` | `Sandbox` | Sandbox MG · isolated |
 | `networkSize` | `Small / Medium / Large` | /27 · /26 · /25 (BYO only) |
@@ -156,6 +156,7 @@ flowchart LR
 | `lzWorkloadCategory` | `BYO` |
 | `lzWorkloadType` | `Private` |
 | `lzApprovedWorkloadPattern` | `` (empty for BYO) |
+| `lzHubType` | `vWAN` |
 | `lzLocation` | `australiaeast` |
 
 ### 3. Stage 0b — Entra Groups outputs
@@ -223,18 +224,40 @@ These are granted in Entra ID (App registrations → API permissions → Microso
 
 ---
 
-## vWAN Connectivity Approach
+## Hub Connectivity Approach
 
-LZA modules (`aca-lza`, `app-service-lza`) accept `hubVirtualNetworkResourceId` — a `Microsoft.Network/virtualNetworks` resource ID. Azure vWAN hubs are `Microsoft.Network/virtualHubs`, a different resource type. Passing a vWAN hub ID into an LZA module would fail ARM validation.
+Hub topology is an organisational decision set once in `customer.config.json` (`hub.type`). It is not configurable per-request. Stage 4 branches on the `lzHubType` pipeline variable derived from this value.
 
-The platform resolves this by setting `hubVirtualNetworkResourceId: ''` in the LZA wrapper and connecting the spoke VNet to the vWAN hub in Stage 4 via:
+### Why hub connectivity is always done in Stage 4 (not Bicep)
+
+LZA modules (`aca-lza`, `app-service-lza`) accept `hubVirtualNetworkResourceId` — a `Microsoft.Network/virtualNetworks` resource ID. Azure vWAN hubs are `Microsoft.Network/virtualHubs`, a different resource type. Passing a vWAN hub ID into an LZA wrapper would fail ARM validation. Rather than handle the two types differently per Bicep template, the platform always sets `hubVirtualNetworkResourceId: ''` in the LZA wrapper and performs all hub connectivity via CLI in Stage 4. This applies equally to BYO and ApprovedWorkload Private deployments.
+
+### vWAN (`hub.type == 'vWAN'`)
 
 ```bash
 az network vhub connection create \
-  --name <resourceBaseName>-vhub-conn \
-  --vhub-name <parsed from customer.config.json> \
-  --resource-group <vwanHubResourceGroupName> \
-  --remote-vnet <spokeVNetResourceId from Stage 3>
+  --name           <resourceBaseName>-vhub-conn \
+  --vhub-name      <parsed from hub.vwanHubResourceId> \
+  --resource-group <hub.vwanHubResourceGroupName> \
+  --remote-vnet    <spokeVNetResourceId from Stage 3>
 ```
 
-This pattern applies to both BYO Private and ApprovedWorkload Private deployments.
+### VNet hub (`hub.type == 'VNet'`)
+
+Two peerings are created — spoke-to-hub and hub-to-spoke. Both require Network Contributor on the respective VNet resource groups.
+
+```bash
+# Spoke → Hub
+az network vnet peering create \
+  --name           <resourceBaseName>-to-hub \
+  --resource-group <spoke VNet RG> \
+  --vnet-name      <spoke VNet name> \
+  --remote-vnet    <hub.vnetHubResourceId>
+
+# Hub → Spoke
+az network vnet peering create \
+  --name           hub-to-<resourceBaseName> \
+  --resource-group <hub.vnetHubResourceGroupName> \
+  --vnet-name      <hub VNet name> \
+  --remote-vnet    <spokeVNetResourceId from Stage 3>
+```
